@@ -80,7 +80,7 @@ already running, it queues one follow-up refresh.
 | `t` | Open an interactive shell at the repository root; `exit` returns to Gitwatch |
 | `d` | Toggle between live diffs and rendered repository documentation |
 | `r` | Refresh immediately |
-| Left click | Select a file from the file list |
+| Left click | Focus a pane; clicking a file in the list also selects it |
 | Mouse wheel | Scroll vertically when the pointer is over the diff pane |
 
 Side-by-side and top-bottom modes (`2` and `3`) are planned for Phase 4.

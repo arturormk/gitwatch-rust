@@ -646,9 +646,6 @@ fn sync_refresh_status(scheduler: &RefreshScheduler, state: &mut AppState) {
 }
 
 fn handle_mouse(mouse: MouseEvent, state: &mut AppState, area: Rect) -> bool {
-    if state.active_file_count() == 0 {
-        return false;
-    }
     let before = (
         state.focus,
         state.selected,
@@ -660,23 +657,28 @@ fn handle_mouse(mouse: MouseEvent, state: &mut AppState, area: Rect) -> bool {
     );
     let (files, diff) = ui::pane_areas(area);
     match mouse.kind {
-        MouseEventKind::Down(MouseButton::Left) if in_inner(files, mouse.column, mouse.row) => {
-            let visible_row = usize::from(mouse.row - files.y - 1);
-            let index = state.active_file_offset() + visible_row;
-            if index < state.active_file_count() {
-                match state.view_mode {
-                    ViewMode::Diff if state.selected != Some(index) => {
-                        state.selected = Some(index);
-                        state.diff_y = 0;
-                        state.diff_x = 0;
+        MouseEventKind::Down(MouseButton::Left) if contains(files, mouse.column, mouse.row) => {
+            state.focus = Focus::Files;
+            if in_inner(files, mouse.column, mouse.row) {
+                let visible_row = usize::from(mouse.row - files.y - 1);
+                let index = state.active_file_offset() + visible_row;
+                if index < state.active_file_count() {
+                    match state.view_mode {
+                        ViewMode::Diff if state.selected != Some(index) => {
+                            state.selected = Some(index);
+                            state.diff_y = 0;
+                            state.diff_x = 0;
+                        }
+                        ViewMode::Documentation if state.document_selected != Some(index) => {
+                            state.select_document(index);
+                        }
+                        _ => {}
                     }
-                    ViewMode::Documentation if state.document_selected != Some(index) => {
-                        state.select_document(index);
-                    }
-                    _ => {}
                 }
-                state.focus = Focus::Files;
             }
+        }
+        MouseEventKind::Down(MouseButton::Left) if contains(diff, mouse.column, mouse.row) => {
+            state.focus = Focus::Diff;
         }
         MouseEventKind::ScrollUp if contains(diff, mouse.column, mouse.row) => {
             state.scroll_content(-3);
@@ -1133,6 +1135,7 @@ mod tests {
     #[test]
     fn mouse_click_selects_visible_file_using_list_offset() {
         let mut state = state(1, vec![file("a", 1), file("b", 1), file("c", 1)]);
+        state.focus = Focus::Diff;
         state.file_offset = 1;
         state.diff_y = 2;
         let area = Rect::new(0, 0, 100, 30);
@@ -1147,8 +1150,51 @@ mod tests {
             &mut state,
             area,
         );
+        assert_eq!(state.focus, Focus::Files);
         assert_eq!(state.selected, Some(2));
         assert_eq!(state.diff_y, 0);
+    }
+
+    #[test]
+    fn mouse_click_focuses_either_pane_without_changing_file_selection() {
+        let mut state = state(1, vec![file("a", 1), file("b", 1)]);
+        state.selected = Some(1);
+        let area = Rect::new(0, 0, 100, 30);
+        let (files, diff) = ui::pane_areas(area);
+        let click = |pane: Rect| MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: pane.x,
+            row: pane.y,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        };
+
+        handle_mouse(click(diff), &mut state, area);
+        assert_eq!(state.focus, Focus::Diff);
+        assert_eq!(state.selected, Some(1));
+
+        handle_mouse(click(files), &mut state, area);
+        assert_eq!(state.focus, Focus::Files);
+        assert_eq!(state.selected, Some(1));
+    }
+
+    #[test]
+    fn mouse_click_can_focus_diff_pane_when_file_list_is_empty() {
+        let mut state = state(1, vec![]);
+        let area = Rect::new(0, 0, 100, 30);
+        let (_, diff) = ui::pane_areas(area);
+
+        handle_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: diff.x + 1,
+                row: diff.y + 1,
+                modifiers: crossterm::event::KeyModifiers::NONE,
+            },
+            &mut state,
+            area,
+        );
+
+        assert_eq!(state.focus, Focus::Diff);
     }
 
     #[test]
