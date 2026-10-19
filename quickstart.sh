@@ -55,10 +55,10 @@ choose_target() {
         '  1) Release executable only' \
         '  2) Debian package (.deb)' \
         '  3) RPM package (.rpm)' >&2
-    read -r -p 'Selection [1-3]: ' selection
+    read -r -p 'Selection [1]: ' selection
 
     case "$selection" in
-        1 | exe) printf 'exe\n' ;;
+        "" | 1 | exe) printf 'exe\n' ;;
         2 | deb) printf 'deb\n' ;;
         3 | rpm) printf 'rpm\n' ;;
         *) die "invalid selection; choose exactly one of 1, 2, or 3" ;;

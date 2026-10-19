@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{
@@ -8,7 +8,10 @@ use crossterm::event::{
 use ratatui::layout::Rect;
 
 use gitwatch_rust::model::{DiffRow, FileChange, RepositorySnapshot};
+use gitwatch_rust::scheduler::{RefreshScheduler, RefreshStatus};
 use gitwatch_rust::snapshot::collect_snapshot;
+use gitwatch_rust::watcher::{RepositoryWatcher, WatchEvent, WatchSource};
+use gitwatch_rust::worker::SnapshotWorker;
 
 use crate::{cli::Cli, highlight::SyntaxHighlighter, terminal::TerminalSession, ui};
 
@@ -43,6 +46,7 @@ pub(crate) struct AppState {
     pub(crate) diff_y: usize,
     pub(crate) diff_x: usize,
     pub(crate) error: Option<String>,
+    pub(crate) pending: bool,
     pub(crate) refreshing: bool,
     generation: u64,
 }
@@ -59,6 +63,7 @@ impl AppState {
             diff_y: 0,
             diff_x: 0,
             error: None,
+            pending: false,
             refreshing: false,
             generation,
         }
@@ -194,14 +199,74 @@ impl AppState {
 
 pub fn run(terminal: &mut TerminalSession, cli: &Cli) -> Result<()> {
     let snapshot = collect_snapshot(&cli.path, 1)?;
+    let (_watcher, watch_events) =
+        RepositoryWatcher::start(&snapshot, Duration::from_millis(cli.poll_ms))?;
+    let worker = SnapshotWorker::spawn(cli.path.clone());
+    let mut scheduler = RefreshScheduler::new(
+        Duration::from_millis(cli.quiet_ms),
+        Duration::from_millis(cli.max_delay_ms),
+    );
     let mut state = AppState::new(snapshot);
+    let mut next_generation = state.generation;
     let highlighter = SyntaxHighlighter::new();
+    let mut redraw = true;
+
+    // Close the small startup window between collecting the initial snapshot
+    // and establishing the filesystem watches.
+    scheduler.manual_refresh();
+    request_snapshot(&worker, &mut state, &mut next_generation)?;
 
     loop {
-        terminal
-            .terminal_mut()
-            .draw(|frame| ui::render(frame, &mut state, &highlighter))?;
-        if !event::poll(Duration::from_millis(250))? {
+        let previous_status = scheduler.status();
+        for event in watch_events.try_iter() {
+            match event {
+                WatchEvent::Change(WatchSource::Filesystem) => {
+                    scheduler.filesystem_hint(Instant::now());
+                }
+                WatchEvent::Change(WatchSource::Polling) => {
+                    scheduler.polling_hint(Instant::now());
+                }
+                WatchEvent::Error(error) => {
+                    redraw |= state.error.as_deref() != Some(error.as_str());
+                    state.error = Some(error);
+                }
+            }
+        }
+
+        while let Some(result) = worker.try_result().map_err(anyhow::Error::msg)? {
+            let mut failed = false;
+            if result.generation >= state.generation {
+                match result.snapshot {
+                    Ok(snapshot) => state.apply_snapshot(snapshot),
+                    Err(error) => {
+                        state.error = Some(error);
+                        failed = true;
+                    }
+                }
+            }
+            if scheduler.refresh_finished() {
+                request_snapshot(&worker, &mut state, &mut next_generation)?;
+            } else if failed {
+                scheduler.polling_hint(Instant::now());
+            }
+            redraw = true;
+        }
+
+        if scheduler.tick(Instant::now()) {
+            request_snapshot(&worker, &mut state, &mut next_generation)?;
+            redraw = true;
+        }
+        sync_refresh_status(&scheduler, &mut state);
+        redraw |= scheduler.status() != previous_status;
+
+        if redraw {
+            terminal
+                .terminal_mut()
+                .draw(|frame| ui::render(frame, &mut state, &highlighter))?;
+            redraw = false;
+        }
+
+        if !event::poll(Duration::from_millis(50))? {
             continue;
         }
         match event::read()? {
@@ -210,37 +275,56 @@ pub fn run(terminal: &mut TerminalSession, cli: &Cli) -> Result<()> {
                     AppAction::Quit => return Ok(()),
                     AppAction::Shell => {
                         terminal.run_shell(&state.snapshot.repository_root)?;
+                        redraw = true;
                     }
                     AppAction::Refresh => {
-                        state.refreshing = true;
-                        terminal
-                            .terminal_mut()
-                            .draw(|frame| ui::render(frame, &mut state, &highlighter))?;
-                        let next_generation = state.generation + 1;
-                        match collect_snapshot(&cli.path, next_generation) {
-                            Ok(snapshot) => state.apply_snapshot(snapshot),
-                            Err(error) => state.error = Some(format!("{error:#}")),
+                        if scheduler.manual_refresh() {
+                            request_snapshot(&worker, &mut state, &mut next_generation)?;
                         }
-                        state.refreshing = false;
+                        sync_refresh_status(&scheduler, &mut state);
+                        redraw = true;
                     }
-                    AppAction::Continue => {}
+                    AppAction::Continue => redraw = true,
                 }
             }
             Event::Mouse(mouse) => {
                 let size = terminal.terminal_mut().size()?;
                 let area = Rect::new(0, 0, size.width, size.height);
-                handle_mouse(mouse, &mut state, area);
+                redraw |= handle_mouse(mouse, &mut state, area);
             }
-            Event::Resize(_, _) => state.clamp_offsets(),
+            Event::Resize(_, _) => {
+                state.clamp_offsets();
+                redraw = true;
+            }
             _ => {}
         }
     }
 }
 
-fn handle_mouse(mouse: MouseEvent, state: &mut AppState, area: Rect) {
+fn request_snapshot(
+    worker: &SnapshotWorker,
+    state: &mut AppState,
+    next_generation: &mut u64,
+) -> Result<()> {
+    *next_generation = next_generation.saturating_add(1);
+    worker
+        .request(*next_generation)
+        .map_err(anyhow::Error::msg)?;
+    state.pending = false;
+    state.refreshing = true;
+    Ok(())
+}
+
+fn sync_refresh_status(scheduler: &RefreshScheduler, state: &mut AppState) {
+    state.pending = scheduler.status() == RefreshStatus::Pending;
+    state.refreshing = scheduler.status() == RefreshStatus::Refreshing;
+}
+
+fn handle_mouse(mouse: MouseEvent, state: &mut AppState, area: Rect) -> bool {
     if state.snapshot.files.is_empty() {
-        return;
+        return false;
     }
+    let before = (state.focus, state.selected, state.diff_y, state.diff_x);
     let (files, diff) = ui::pane_areas(area);
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) if in_inner(files, mouse.column, mouse.row) => {
@@ -263,6 +347,7 @@ fn handle_mouse(mouse: MouseEvent, state: &mut AppState, area: Rect) {
         }
         _ => {}
     }
+    before != (state.focus, state.selected, state.diff_y, state.diff_x)
 }
 
 fn contains(area: Rect, column: u16, row: u16) -> bool {

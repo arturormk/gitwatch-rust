@@ -76,6 +76,8 @@ pub(crate) fn pane_areas(area: Rect) -> (Rect, Rect) {
 fn render_header(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     let status = if state.refreshing {
         ("refreshing", Color::Yellow)
+    } else if state.pending {
+        ("pending", Color::Yellow)
     } else if state.error.is_some() {
         ("error", Color::Red)
     } else {

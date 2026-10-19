@@ -4,10 +4,13 @@
 is designed to stay open beside a coding agent in a normal terminal, tmux, or
 Byobu pane.
 
-The project is currently at **Phase 2**. It provides a navigable unified diff of
+The project is currently at **Phase 3**. It provides a navigable unified diff of
 the current `HEAD`-to-working-tree changes, including staged, unstaged,
 untracked, renamed, deleted, binary, large, symlink, and submodule states.
-Refreshes are manual until the live watcher arrives in Phase 3.
+Native filesystem notifications update the view automatically after a quiet
+period, with polling as a fallback for missed events and Git metadata changes.
+Snapshot collection runs on a background thread so navigation remains
+responsive during refreshes.
 
 ## Build and run
 
@@ -19,6 +22,7 @@ cargo run -- /path/to/repository
 
 For a release build, run the quickstart script and select exactly one output:
 the executable alone, a Debian package, or an RPM package.
+Pressing Enter at the prompt selects the release executable (option 1).
 
 ```console
 ./quickstart.sh
@@ -44,6 +48,11 @@ The optional refresh timings default to the policy in the project blueprint:
 --max-delay-ms 10000
 --poll-ms 2000
 ```
+
+Filesystem changes use trailing-edge debouncing: Gitwatch refreshes after the
+quiet period, but continuous activity cannot postpone a refresh beyond the
+maximum delay. Pressing `r` requests an immediate refresh; if a refresh is
+already running, it queues one follow-up refresh.
 
 ## Keyboard and mouse controls
 

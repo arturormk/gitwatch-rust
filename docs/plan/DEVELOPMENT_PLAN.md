@@ -331,7 +331,7 @@ resize the terminal, and quit with the terminal restored.
 
 ### Phase 3 — Live refresh
 
-**Status: Not started.**
+**Status: Complete.**
 
 - Add filesystem watcher and relevant Git metadata watches.
 - Implement scheduler state machine, quiet period, maximum delay, polling,
