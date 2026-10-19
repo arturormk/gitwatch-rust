@@ -2,7 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
-use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -15,6 +15,8 @@ use crate::highlight::SyntaxHighlighter;
 
 const MAX_RENDERED_LINES: usize = 100_000;
 const MAX_RENDERED_LINE_BYTES: usize = 16_384;
+const CODE_BLOCK_INDENT: &str = "    ";
+const CODE_BACKGROUND: Color = Color::Indexed(234);
 
 #[derive(Debug, Default)]
 pub(crate) struct MarkdownCache {
@@ -127,6 +129,14 @@ struct MarkdownRenderer<'a> {
     quote_depth: usize,
     code_path: Option<PathBuf>,
     links: Vec<String>,
+    table: Option<MarkdownTable>,
+}
+
+struct MarkdownTable {
+    alignments: Vec<Alignment>,
+    rows: Vec<Vec<Line<'static>>>,
+    row: Vec<Line<'static>>,
+    header_rows: usize,
 }
 
 impl<'a> MarkdownRenderer<'a> {
@@ -141,6 +151,7 @@ impl<'a> MarkdownRenderer<'a> {
             quote_depth: 0,
             code_path: None,
             links: Vec::new(),
+            table: None,
         }
     }
 
@@ -151,7 +162,7 @@ impl<'a> MarkdownRenderer<'a> {
             Event::Text(text) => self.text(&text),
             Event::Code(code) => self.spans.push(Span::styled(
                 code.into_string(),
-                self.style.fg(Color::Yellow).bg(Color::DarkGray),
+                self.style.fg(Color::Red).bg(CODE_BACKGROUND),
             )),
             Event::SoftBreak => self.push_text(" "),
             Event::HardBreak => self.flush(),
@@ -229,9 +240,17 @@ impl<'a> MarkdownRenderer<'a> {
                 self.push_text("[image: ");
                 self.push_style(self.style.fg(Color::Magenta));
             }
-            Tag::Table(_) => self.flush(),
-            Tag::TableHead | Tag::TableRow => self.flush(),
-            Tag::TableCell if !self.spans.is_empty() => self.push_text(" │ "),
+            Tag::Table(alignments) => {
+                self.flush();
+                self.table = Some(MarkdownTable {
+                    alignments,
+                    rows: Vec::new(),
+                    row: Vec::new(),
+                    header_rows: 0,
+                });
+            }
+            Tag::TableHead | Tag::TableRow => {}
+            Tag::TableCell => self.spans.clear(),
             _ => {}
         }
     }
@@ -277,10 +296,21 @@ impl<'a> MarkdownRenderer<'a> {
                 self.push_text(&format!("] ({destination})"));
             }
             TagEnd::Table => {
-                self.flush();
+                if let Some(table) = self.table.take() {
+                    for line in render_table(table) {
+                        self.push_line(line, false);
+                    }
+                }
                 self.blank_line();
             }
-            TagEnd::TableHead | TagEnd::TableRow => self.flush(),
+            TagEnd::TableHead => self.finish_table_row(true),
+            TagEnd::TableRow => self.finish_table_row(false),
+            TagEnd::TableCell => {
+                let cell = Line::from(std::mem::take(&mut self.spans));
+                if let Some(table) = &mut self.table {
+                    table.row.push(cell);
+                }
+            }
             _ => {}
         }
     }
@@ -293,9 +323,10 @@ impl<'a> MarkdownRenderer<'a> {
                 }
                 if !line.is_empty() {
                     self.prefix_block();
+                    self.spans.push(Span::raw(CODE_BLOCK_INDENT));
                     let spans = self.highlighter.line(&path, line);
                     self.spans.extend(spans.into_iter().map(|span| {
-                        Span::styled(span.content.into_owned(), span.style.bg(Color::DarkGray))
+                        Span::styled(span.content.into_owned(), span.style.bg(CODE_BACKGROUND))
                     }));
                 }
             }
@@ -341,6 +372,17 @@ impl<'a> MarkdownRenderer<'a> {
     fn finish_block(&mut self) {
         self.flush();
         self.blank_line();
+    }
+
+    fn finish_table_row(&mut self, header: bool) {
+        if let Some(table) = &mut self.table
+            && !table.row.is_empty()
+        {
+            table.rows.push(std::mem::take(&mut table.row));
+            if header {
+                table.header_rows = table.rows.len();
+            }
+        }
     }
 
     fn blank_line(&mut self) {
@@ -474,12 +516,93 @@ fn heading_marker(level: HeadingLevel) -> &'static str {
 }
 
 fn heading_style(level: HeadingLevel) -> Style {
-    let color = match level {
-        HeadingLevel::H1 => Color::Cyan,
-        HeadingLevel::H2 => Color::Blue,
-        _ => Color::Magenta,
+    let modifier = match level {
+        HeadingLevel::H1 | HeadingLevel::H2 => Modifier::BOLD,
+        _ => Modifier::empty(),
     };
-    Style::default().fg(color).add_modifier(Modifier::BOLD)
+    Style::default().fg(Color::LightBlue).add_modifier(modifier)
+}
+
+fn render_table(table: MarkdownTable) -> Vec<Line<'static>> {
+    let column_count = table
+        .rows
+        .iter()
+        .map(Vec::len)
+        .max()
+        .unwrap_or_default()
+        .max(table.alignments.len());
+    if column_count == 0 {
+        return Vec::new();
+    }
+
+    let mut widths = vec![1; column_count];
+    for row in &table.rows {
+        for (column, cell) in row.iter().enumerate() {
+            widths[column] = widths[column].max(cell.width());
+        }
+    }
+
+    let border_style = Style::default().fg(Color::DarkGray);
+    let mut lines = vec![table_border('┌', '┬', '┐', &widths, border_style)];
+    for (row_index, row) in table.rows.iter().enumerate() {
+        let header = row_index < table.header_rows;
+        let mut spans = vec![Span::styled("  │ ", border_style)];
+        for column in 0..column_count {
+            let cell = row.get(column).cloned().unwrap_or_default();
+            let alignment = table
+                .alignments
+                .get(column)
+                .copied()
+                .unwrap_or(Alignment::None);
+            let padding = widths[column].saturating_sub(cell.width());
+            let (left, right) = match alignment {
+                Alignment::Right => (padding, 0),
+                Alignment::Center => (padding / 2, padding - padding / 2),
+                Alignment::None | Alignment::Left => (0, padding),
+            };
+            spans.push(Span::raw(" ".repeat(left)));
+            spans.extend(cell.spans.into_iter().map(|mut span| {
+                if header {
+                    span.style = span.style.add_modifier(Modifier::BOLD);
+                }
+                span
+            }));
+            spans.push(Span::raw(" ".repeat(right)));
+            spans.push(Span::styled(
+                if column + 1 == column_count {
+                    " │"
+                } else {
+                    " │ "
+                },
+                border_style,
+            ));
+        }
+        lines.push(Line::from(spans));
+        if row_index + 1 == table.header_rows && row_index + 1 < table.rows.len() {
+            lines.push(table_border('├', '┼', '┤', &widths, border_style));
+        }
+    }
+    lines.push(table_border('└', '┴', '┘', &widths, border_style));
+    lines
+}
+
+fn table_border(
+    left: char,
+    separator: char,
+    right: char,
+    widths: &[usize],
+    style: Style,
+) -> Line<'static> {
+    let mut border = format!("  {left}");
+    for (index, width) in widths.iter().enumerate() {
+        border.push_str(&"─".repeat(width + 2));
+        border.push(if index + 1 == widths.len() {
+            right
+        } else {
+            separator
+        });
+    }
+    Line::styled(border, style)
 }
 
 fn code_path(kind: &CodeBlockKind<'_>) -> PathBuf {
