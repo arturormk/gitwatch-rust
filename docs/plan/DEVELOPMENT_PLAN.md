@@ -369,6 +369,68 @@ hunk navigation refers to the same logical hunks in all modes.
 Exit criterion: every blueprint acceptance criterion is either demonstrated by
 an automated test or recorded manual check, with no repository mutation observed.
 
+### Phase 6 — Documentation browser (proposed added feature)
+
+**Status: Proposed; post-version-one.**
+
+This phase is an added feature, not part of the original blueprint or the
+version-one definition of done. It is nevertheless a good fit for the product:
+users already leave Gitwatch beside a coding agent, and opening a shell with `t`
+only to run a Markdown viewer is avoidable friction. Keep this work after the
+core diff presentations and release hardening so it does not delay or blur the
+original live-diff goal.
+
+Add a documentation browsing mode toggled with `d` (`d` for documentation).
+This is an application mode, not a fourth diff presentation: keys `1`, `2`, and
+`3` continue to select unified, side-by-side, and top-bottom presentation within
+diff mode. Pressing `d` shows documentation and pressing it again returns to the
+previous diff presentation, preserving both modes' selections and scroll
+positions.
+
+- In documentation mode, replace the changed-file inventory with a sorted list
+  of repository-relative `*.md` files and render the selected file in the right
+  pane. The documentation list is available even when the working tree is clean.
+- Discover regular Markdown files recursively below the repository root. Exclude
+  Git's administrative directory, do not follow directory symlinks, and apply
+  the same bounded-I/O and transient-error behavior used for snapshot content.
+  Include tracked, untracked, ignored, and hidden `*.md` files: documentation
+  mode is a filesystem browser, not a Git-status view. If a safety limit is
+  reached, say that the inventory is incomplete rather than silently omitting
+  files.
+- Parse Markdown in-process and translate it into styled Ratatui lines. Support
+  terminal-appropriate rendering for headings, paragraphs, emphasis, lists,
+  block quotes, thematic breaks, links, fenced/indented code blocks, and tables.
+  Syntax-highlight fenced code when a language is supplied. Images and raw HTML
+  get concise textual placeholders; no browser, pager, or external `glow`
+  process is required.
+- Wrap prose to the current right-pane width while preserving code-block layout
+  and horizontal scrolling for long code. Reflow and clamp the viewport after a
+  resize. `j`/`k`, arrows, Page Up/Down, Home/End, mouse selection, mouse-wheel
+  scrolling, `Tab`, `r`, `t`, and `q` retain their conventional meanings. Hide
+  hunk-only `n`/`p` help while documentation mode is active.
+- Keep documentation inventory/content separate from `RepositorySnapshot` and
+  `FileChange`; those types describe Git changes. Add a small documentation
+  model and renderer, with independent selected path and per-document scroll
+  state in `AppState`. Collection must run off the UI thread and may share a
+  refresh generation with the repository snapshot.
+- Reuse working-tree watch hints so creating, editing, renaming, or deleting a
+  Markdown file refreshes the documentation view after the normal debounce.
+  Preserve selection by repository-relative path, fall back to the nearest
+  sorted path if it disappears, and keep the last good rendered document on a
+  transient read or parse failure.
+- Cap the number, byte size, rendered line count, and individual rendered-line
+  width of documents. Show an informative placeholder at a limit instead of
+  freezing the UI. Cache parsed output by path plus file metadata/content digest
+  so unrelated filesystem activity does not repeatedly parse every document.
+- Update the header, pane titles, contextual footer, README shortcut table, and
+  help text so the active application mode and the return path to diffs are
+  unambiguous.
+
+Exit criterion: from either a dirty or clean repository, `d` immediately opens
+a responsive repository documentation browser; Markdown structure is legible in
+normal and narrow terminals; live edits appear without losing useful reading
+position; and another `d` restores the prior diff view unchanged.
+
 ## 9. Test plan
 
 ### Unit tests
@@ -383,6 +445,10 @@ an automated test or recorded manual check, with no repository mutation observed
   per-mode offsets, hunk anchors, and resize clamping.
 - Rendering calculations: narrow widths, Unicode display width, line-number
   gutters, long-line horizontal offsets, and status truncation.
+- Documentation browser: Markdown-path discovery and sorting (including ignored
+  and hidden files), symlink policy, terminal rendering of each supported
+  Markdown construct, wrapping and resize reflow, selection fallback,
+  independent mode state, cache invalidation, and size-limit placeholders.
 
 Use a fake/injectable clock for scheduler tests and pure state-transition
 functions for app behavior.
@@ -446,6 +512,8 @@ surprisingly hidden.
 | Syntax and diff styles become unreadable | Make diff semantics dominant, use conservative colors, and manually test light/dark terminals. |
 | Unusual paths corrupt parsing or selection | Parse `-z` bytes, retain lossless path identity, and escape only for display. |
 | Large/binary content freezes the TUI | Detect early, apply bounded reads/output, and render explanatory placeholders. |
+| Documentation scans or Markdown rendering make refreshes sluggish | Scan and parse off the UI thread, do not follow directory symlinks, enforce explicit bounds, report incomplete inventories, and cache documents by path plus metadata/content digest. |
+| Markdown cannot reproduce browser layout in a terminal | Define terminal-native rendering explicitly, preserve semantic structure and code, and use placeholders for images/raw HTML. |
 | Terminal remains in raw/alternate-screen mode after failure | Central terminal guard plus panic/error restoration and manual interruption tests. |
 
 ## 12. Deferred items
