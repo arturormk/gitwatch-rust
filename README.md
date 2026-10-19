@@ -45,7 +45,7 @@ The optional refresh timings default to the policy in the project blueprint:
 --poll-ms 2000
 ```
 
-## Keyboard controls
+## Keyboard and mouse controls
 
 | Key | Action |
 |---|---|
@@ -57,7 +57,10 @@ The optional refresh timings default to the policy in the project blueprint:
 | `Page Up` / `Page Down` | Move by a larger step |
 | `Home` / `End` | Move to the beginning/end |
 | `n` / `p` | Next / previous hunk |
+| `t` | Open an interactive shell at the repository root; `exit` returns to Gitwatch |
 | `r` | Refresh immediately |
+| Left click | Select a file from the file list |
+| Mouse wheel | Scroll vertically when the pointer is over the diff pane |
 
 Side-by-side and top-bottom modes (`2` and `3`) are planned for Phase 4.
 

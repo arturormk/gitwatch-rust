@@ -27,5 +27,5 @@ fn run() -> Result<()> {
     }
 
     let mut terminal = TerminalSession::enter().context("failed to initialize terminal")?;
-    app::run(terminal.terminal_mut(), &cli)
+    app::run(&mut terminal, &cli)
 }

@@ -264,7 +264,13 @@ a short narrow-terminal hint if content is severely constrained.
 Input mapping follows the blueprint. Arrow keys and `j`/`k` act on the focused
 pane; Page Up/Down, Home/End are added as conventional aliases. File selection
 immediately swaps the diff without refreshing repository data. `n`/`p` move to
-hunk anchors in the selected file.
+hunk anchors in the selected file. A left click selects a visible file, and the
+mouse wheel scrolls vertically only while the pointer is over the diff pane.
+
+The `t` key temporarily restores the normal terminal, launches `$SHELL` at the
+repository root (falling back to `/bin/sh`), and resumes the same TUI state when
+the shell exits. Mouse capture must be disabled while the shell is active and
+restored with raw mode and the alternate screen afterward.
 
 Syntax highlighting is chosen from the displayed path/extension, with a plain
 text fallback. Compose syntax foreground styles with diff background/emphasis so
@@ -313,13 +319,15 @@ the index/repository unchanged.
 - Render header, flat file list, unified diff, footer, empty/error states.
 - Implement focus, file selection, vertical/horizontal scrolling, hunk
   navigation, resize handling, and `q`/`r`.
+- Support mouse file selection, diff scrolling, and a temporary interactive
+  shell opened with `t`.
 - Preserve file selection and clamp/restore scroll anchors when a new snapshot is
   applied.
 - Add syntax highlighting after basic unified rendering is correct.
 
 Exit criterion: a user can launch from a repository subdirectory, inspect every
-current change by keyboard, resize the terminal, and quit with the terminal
-restored.
+current change by keyboard or mouse, run a quick command in the temporary shell,
+resize the terminal, and quit with the terminal restored.
 
 ### Phase 3 — Live refresh
 
@@ -448,7 +456,6 @@ shows they are required:
 - collapsible directory tree;
 - user configuration/theme files;
 - persistent state or historical/session baselines;
-- mouse support;
 - staging, editing, commit, branch, or remote operations;
 - plugin architecture or library API;
 - multiple repositories in one process;

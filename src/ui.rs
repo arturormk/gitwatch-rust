@@ -16,15 +16,8 @@ use crate::{
 };
 
 pub(crate) fn render(frame: &mut Frame<'_>, state: &mut AppState, highlighter: &SyntaxHighlighter) {
-    let areas = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(1),
-            Constraint::Length(1),
-        ])
-        .split(frame.area());
-    render_header(frame, areas[0], state);
+    let areas = screen_areas(frame.area());
+    render_header(frame, areas.0, state);
 
     if state.snapshot.files.is_empty() {
         let message = if let Some(error) = &state.error {
@@ -41,22 +34,43 @@ pub(crate) fn render(frame: &mut Frame<'_>, state: &mut AppState, highlighter: &
                         .borders(Borders::ALL)
                         .title(" Unified diff "),
                 ),
-            areas[1],
+            areas.1,
         );
     } else {
-        let left_width = if areas[1].width < 48 {
-            (areas[1].width / 3).max(12)
-        } else {
-            (areas[1].width * 28 / 100).clamp(20, 42)
-        };
-        let body = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(left_width), Constraint::Min(1)])
-            .split(areas[1]);
-        render_files(frame, body[0], state);
-        render_diff(frame, body[1], state, highlighter);
+        let (files, diff) = body_panes(areas.1);
+        render_files(frame, files, state);
+        render_diff(frame, diff, state, highlighter);
     }
-    render_footer(frame, areas[2], state);
+    render_footer(frame, areas.2, state);
+}
+
+fn screen_areas(area: Rect) -> (Rect, Rect, Rect) {
+    let areas = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(area);
+    (areas[0], areas[1], areas[2])
+}
+
+fn body_panes(body: Rect) -> (Rect, Rect) {
+    let left_width = if body.width < 48 {
+        (body.width / 3).max(12)
+    } else {
+        (body.width * 28 / 100).clamp(20, 42)
+    };
+    let panes = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(left_width), Constraint::Min(1)])
+        .split(body);
+    (panes[0], panes[1])
+}
+
+pub(crate) fn pane_areas(area: Rect) -> (Rect, Rect) {
+    body_panes(screen_areas(area).1)
 }
 
 fn render_header(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
@@ -170,9 +184,9 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     let text = if let Some(error) = &state.error {
         format!(" error: {error}  •  r retry  q quit")
     } else if area.width < 72 {
-        " Tab focus  ↑↓ move  n/p hunk  r refresh  q quit".to_owned()
+        " Tab focus  ↑↓ move  n/p hunk  t shell  r refresh  q quit".to_owned()
     } else {
-        " Tab focus  ↑↓/j/k move  ←→/h/l scroll  n/p hunk  r refresh  q quit".to_owned()
+        " Tab focus  ↑↓/j/k move  ←→/h/l scroll  n/p hunk  t shell  r refresh  q quit".to_owned()
     };
     frame.render_widget(
         Paragraph::new(text).style(Style::default().add_modifier(Modifier::DIM)),

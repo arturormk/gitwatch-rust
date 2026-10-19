@@ -1,20 +1,29 @@
-use std::io;
 use std::path::Path;
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
-use ratatui::{Terminal, backend::CrosstermBackend};
+use crossterm::event::{
+    self, Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind,
+};
+use ratatui::layout::Rect;
 
 use gitwatch_rust::model::{DiffRow, FileChange, RepositorySnapshot};
 use gitwatch_rust::snapshot::collect_snapshot;
 
-use crate::{cli::Cli, highlight::SyntaxHighlighter, ui};
+use crate::{cli::Cli, highlight::SyntaxHighlighter, terminal::TerminalSession, ui};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Focus {
     Files,
     Diff,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AppAction {
+    Continue,
+    Quit,
+    Refresh,
+    Shell,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -183,31 +192,44 @@ impl AppState {
     }
 }
 
-pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, cli: &Cli) -> Result<()> {
+pub fn run(terminal: &mut TerminalSession, cli: &Cli) -> Result<()> {
     let snapshot = collect_snapshot(&cli.path, 1)?;
     let mut state = AppState::new(snapshot);
     let highlighter = SyntaxHighlighter::new();
 
     loop {
-        terminal.draw(|frame| ui::render(frame, &mut state, &highlighter))?;
+        terminal
+            .terminal_mut()
+            .draw(|frame| ui::render(frame, &mut state, &highlighter))?;
         if !event::poll(Duration::from_millis(250))? {
             continue;
         }
         match event::read()? {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
-                if handle_key(key, &mut state) {
-                    return Ok(());
-                }
-                if matches!(key.code, KeyCode::Char('r')) {
-                    state.refreshing = true;
-                    terminal.draw(|frame| ui::render(frame, &mut state, &highlighter))?;
-                    let next_generation = state.generation + 1;
-                    match collect_snapshot(&cli.path, next_generation) {
-                        Ok(snapshot) => state.apply_snapshot(snapshot),
-                        Err(error) => state.error = Some(format!("{error:#}")),
+                match handle_key(key, &mut state) {
+                    AppAction::Quit => return Ok(()),
+                    AppAction::Shell => {
+                        terminal.run_shell(&state.snapshot.repository_root)?;
                     }
-                    state.refreshing = false;
+                    AppAction::Refresh => {
+                        state.refreshing = true;
+                        terminal
+                            .terminal_mut()
+                            .draw(|frame| ui::render(frame, &mut state, &highlighter))?;
+                        let next_generation = state.generation + 1;
+                        match collect_snapshot(&cli.path, next_generation) {
+                            Ok(snapshot) => state.apply_snapshot(snapshot),
+                            Err(error) => state.error = Some(format!("{error:#}")),
+                        }
+                        state.refreshing = false;
+                    }
+                    AppAction::Continue => {}
                 }
+            }
+            Event::Mouse(mouse) => {
+                let size = terminal.terminal_mut().size()?;
+                let area = Rect::new(0, 0, size.width, size.height);
+                handle_mouse(mouse, &mut state, area);
             }
             Event::Resize(_, _) => state.clamp_offsets(),
             _ => {}
@@ -215,9 +237,55 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, cli: &Cli) -> 
     }
 }
 
-fn handle_key(key: KeyEvent, state: &mut AppState) -> bool {
+fn handle_mouse(mouse: MouseEvent, state: &mut AppState, area: Rect) {
+    if state.snapshot.files.is_empty() {
+        return;
+    }
+    let (files, diff) = ui::pane_areas(area);
+    match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) if in_inner(files, mouse.column, mouse.row) => {
+            let visible_row = usize::from(mouse.row - files.y - 1);
+            let index = state.file_offset + visible_row;
+            if index < state.snapshot.files.len() {
+                if state.selected != Some(index) {
+                    state.selected = Some(index);
+                    state.diff_y = 0;
+                    state.diff_x = 0;
+                }
+                state.focus = Focus::Files;
+            }
+        }
+        MouseEventKind::ScrollUp if contains(diff, mouse.column, mouse.row) => {
+            state.scroll_diff(-3);
+        }
+        MouseEventKind::ScrollDown if contains(diff, mouse.column, mouse.row) => {
+            state.scroll_diff(3);
+        }
+        _ => {}
+    }
+}
+
+fn contains(area: Rect, column: u16, row: u16) -> bool {
+    column >= area.x
+        && column < area.x.saturating_add(area.width)
+        && row >= area.y
+        && row < area.y.saturating_add(area.height)
+}
+
+fn in_inner(area: Rect, column: u16, row: u16) -> bool {
+    area.width > 2
+        && area.height > 2
+        && column > area.x
+        && column < area.x.saturating_add(area.width).saturating_sub(1)
+        && row > area.y
+        && row < area.y.saturating_add(area.height).saturating_sub(1)
+}
+
+fn handle_key(key: KeyEvent, state: &mut AppState) -> AppAction {
     match key.code {
-        KeyCode::Char('q') | KeyCode::Esc => return true,
+        KeyCode::Char('q') | KeyCode::Esc => return AppAction::Quit,
+        KeyCode::Char('r') => return AppAction::Refresh,
+        KeyCode::Char('t') => return AppAction::Shell,
         KeyCode::Tab => {
             state.focus = match state.focus {
                 Focus::Files => Focus::Diff,
@@ -258,7 +326,7 @@ fn handle_key(key: KeyEvent, state: &mut AppState) -> bool {
         KeyCode::Char('p') => state.move_hunk(false),
         _ => {}
     }
-    false
+    AppAction::Continue
 }
 
 fn find_file(files: &[FileChange], old_key: &Path) -> Option<usize> {
@@ -423,6 +491,54 @@ mod tests {
         state.move_hunk(true);
         assert_eq!(state.diff_y, 3);
         state.move_hunk(false);
+        assert_eq!(state.diff_y, 0);
+    }
+
+    #[test]
+    fn terminal_key_requests_an_interactive_shell() {
+        let mut state = AppState::new(snapshot(1, vec![]));
+        let key = KeyEvent::new(KeyCode::Char('t'), crossterm::event::KeyModifiers::NONE);
+        assert_eq!(handle_key(key, &mut state), AppAction::Shell);
+    }
+
+    #[test]
+    fn mouse_click_selects_visible_file_using_list_offset() {
+        let mut state = AppState::new(snapshot(1, vec![file("a", 1), file("b", 1), file("c", 1)]));
+        state.file_offset = 1;
+        state.diff_y = 2;
+        let area = Rect::new(0, 0, 100, 30);
+        let (files, _) = ui::pane_areas(area);
+        handle_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: files.x + 1,
+                row: files.y + 2,
+                modifiers: crossterm::event::KeyModifiers::NONE,
+            },
+            &mut state,
+            area,
+        );
+        assert_eq!(state.selected, Some(2));
+        assert_eq!(state.diff_y, 0);
+    }
+
+    #[test]
+    fn mouse_wheel_scrolls_only_over_diff_pane() {
+        let mut state = AppState::new(snapshot(1, vec![file("a", 1)]));
+        let area = Rect::new(0, 0, 100, 30);
+        let (files, diff) = ui::pane_areas(area);
+        let wheel = |kind, pane: Rect| MouseEvent {
+            kind,
+            column: pane.x + 1,
+            row: pane.y + 1,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        };
+
+        handle_mouse(wheel(MouseEventKind::ScrollDown, files), &mut state, area);
+        assert_eq!(state.diff_y, 0);
+        handle_mouse(wheel(MouseEventKind::ScrollDown, diff), &mut state, area);
+        assert_eq!(state.diff_y, 2);
+        handle_mouse(wheel(MouseEventKind::ScrollUp, diff), &mut state, area);
         assert_eq!(state.diff_y, 0);
     }
 }

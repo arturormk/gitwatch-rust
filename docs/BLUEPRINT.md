@@ -174,12 +174,13 @@ When refreshing:
 
 Prefer preserving a visible diff hunk or source-line anchor when practical, but do not introduce excessive complexity for the first version.
 
-### 2.6 Keyboard controls
+### 2.6 Keyboard and mouse controls
 
 | Key | Action |
 |---|---|
 | `↑` / `↓` | Navigate within the focused pane |
 | `Tab` | Switch focus between file list and diff |
+| `t` | Open an interactive shell at the repository root; `exit` returns to the TUI |
 | `j` / `k` | Scroll or navigate within focused pane |
 | `1` | Unified diff |
 | `2` | Side-by-side diff |
@@ -188,6 +189,8 @@ Prefer preserving a visible diff hunk or source-line anchor when practical, but 
 | `←` / `→` | Horizontal scrolling when appropriate |
 | `r` | Force immediate refresh |
 | `q` | Quit |
+| Left click | Select a file from the file list |
+| Mouse wheel | Scroll vertically when the pointer is over the diff pane |
 
 Additional conventional TUI navigation keys, such as Page Up, Page Down, Home, and End, are welcome.
 
@@ -330,7 +333,7 @@ Keep the following concerns separate:
 3. Git state collection.
 4. Diff computation.
 5. Rendering.
-6. Keyboard input.
+6. Keyboard and mouse input.
 
 The UI event loop must not block on filesystem scans, large diffs, or Git subprocesses.
 
