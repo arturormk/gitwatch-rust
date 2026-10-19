@@ -4,9 +4,9 @@
 is designed to stay open beside a coding agent in a normal terminal, tmux, or
 Byobu pane.
 
-The core roadmap is complete through **Phase 3**, and the added Phase 6
-documentation browser is also complete while Phases 4 and 5 remain pending.
-Gitwatch provides a navigable unified diff of the current
+The core roadmap is complete through **Phase 4**, and the added Phase 6
+documentation browser is also complete while Phase 5 remains pending.
+Gitwatch provides navigable unified, before-file, and after-file views of the current
 `HEAD`-to-working-tree changes, including staged, unstaged,
 untracked, renamed, deleted, binary, large, symlink, and submodule states.
 Native filesystem notifications update the view automatically after a quiet
@@ -77,13 +77,17 @@ already running, it queues one follow-up refresh.
 | `Page Up` / `Page Down` | Move by a larger step |
 | `Home` / `End` | Move to the beginning/end |
 | `n` / `p` | Next / previous hunk when no search is active |
+| `v` / `V` | Cycle forward / backward through unified, before, and after views |
 | `t` | Open an interactive shell at the repository root; `exit` returns to Gitwatch |
 | `d` | Toggle between live diffs and rendered repository documentation |
-| `r` | Refresh immediately |
+| `r` | Refresh immediately (normally unnecessary because refresh is automatic) |
 | Left click | Focus a pane; clicking a file in the list also selects it |
 | Mouse wheel | Scroll vertically when the pointer is over the diff pane |
 
-Side-by-side and top-bottom modes (`2` and `3`) are planned for Phase 4.
+When switching views with `v` or `V`, Gitwatch keeps a corresponding source line near
+the tenth row of the viewport where possible. Changed lines retain diff-style
+backgrounds: red for modified/deleted lines before and green for modified/added
+lines after.
 
 ## Safety
 

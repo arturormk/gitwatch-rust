@@ -547,14 +547,14 @@ fn render_table(table: MarkdownTable) -> Vec<Line<'static>> {
     for (row_index, row) in table.rows.iter().enumerate() {
         let header = row_index < table.header_rows;
         let mut spans = vec![Span::styled("  │ ", border_style)];
-        for column in 0..column_count {
+        for (column, width) in widths.iter().copied().enumerate() {
             let cell = row.get(column).cloned().unwrap_or_default();
             let alignment = table
                 .alignments
                 .get(column)
                 .copied()
                 .unwrap_or(Alignment::None);
-            let padding = widths[column].saturating_sub(cell.width());
+            let padding = width.saturating_sub(cell.width());
             let (left, right) = match alignment {
                 Alignment::Right => (padding, 0),
                 Alignment::Center => (padding / 2, padding - padding / 2),
@@ -692,7 +692,11 @@ mod tests {
         );
         let lines = rendered.layout(8);
         assert!(lines.len() > 2);
-        assert!(lines.iter().any(|line| line.width() == 16));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.width() == CODE_BLOCK_INDENT.len() + 16)
+        );
     }
 
     #[test]

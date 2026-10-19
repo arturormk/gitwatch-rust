@@ -36,6 +36,33 @@ pub(crate) enum ViewMode {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DiffPresentation {
+    Unified,
+    Before,
+    After,
+}
+
+impl DiffPresentation {
+    fn next(self) -> Self {
+        match self {
+            Self::Unified => Self::Before,
+            Self::Before => Self::After,
+            Self::After => Self::Unified,
+        }
+    }
+
+    fn previous(self) -> Self {
+        match self {
+            Self::Unified => Self::After,
+            Self::Before => Self::Unified,
+            Self::After => Self::Before,
+        }
+    }
+}
+
+const VIEW_ANCHOR_ROW: usize = 9;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AppAction {
     Continue,
     Quit,
@@ -72,6 +99,7 @@ pub(crate) struct AppState {
     pub(crate) snapshot: RepositorySnapshot,
     pub(crate) documentation: DocumentationSnapshot,
     pub(crate) view_mode: ViewMode,
+    pub(crate) diff_presentation: DiffPresentation,
     pub(crate) focus: Focus,
     pub(crate) selected: Option<usize>,
     pub(crate) file_offset: usize,
@@ -99,6 +127,7 @@ impl AppState {
             snapshot,
             documentation,
             view_mode: ViewMode::Diff,
+            diff_presentation: DiffPresentation::Unified,
             focus: Focus::Files,
             selected,
             file_offset: 0,
@@ -195,7 +224,7 @@ impl AppState {
     fn apply_snapshot(&mut self, snapshot: RepositorySnapshot) {
         let old_index = self.selected.unwrap_or_default();
         let old_key = self.selected_file().map(|file| file.key.clone());
-        let anchor = self.current_anchor();
+        let anchor = self.current_anchor_at(self.diff_y);
 
         self.generation = snapshot.generation;
         self.snapshot = snapshot;
@@ -210,16 +239,28 @@ impl AppState {
         self.file_offset = self.file_offset.min(self.selected.unwrap_or_default());
         self.diff_y = anchor
             .as_ref()
-            .and_then(|anchor| self.selected_file().map(|file| locate_anchor(file, anchor)))
+            .and_then(|anchor| {
+                self.selected_file()
+                    .map(|file| locate_anchor(file, anchor, self.diff_presentation))
+            })
             .unwrap_or(0);
         self.clamp_offsets();
     }
 
-    fn current_anchor(&self) -> Option<SourceAnchor> {
+    fn current_anchor_at(&self, rendered_y: usize) -> Option<SourceAnchor> {
         let file = self.selected_file()?;
+        match self.diff_presentation {
+            DiffPresentation::Before => {
+                return version_anchor(file, rendered_y + 1, DiffPresentation::Before);
+            }
+            DiffPresentation::After => {
+                return version_anchor(file, rendered_y + 1, DiffPresentation::After);
+            }
+            DiffPresentation::Unified => {}
+        }
         let mut rendered_row = usize::from(file.mode_changed || file.old_path != file.new_path);
         for (hunk_index, hunk) in file.diff.hunks.iter().enumerate() {
-            if self.diff_y == rendered_row {
+            if rendered_y == rendered_row {
                 return Some(SourceAnchor {
                     hunk: hunk_index,
                     old_line: Some(hunk.old_start),
@@ -230,13 +271,13 @@ impl AppState {
             rendered_row += 1;
             for row in &hunk.rows {
                 let height = row_height(row);
-                if self.diff_y < rendered_row + height {
+                if rendered_y < rendered_row + height {
                     let (old_line, new_line) = row_source_lines(row);
                     return Some(SourceAnchor {
                         hunk: hunk_index,
                         old_line,
                         new_line,
-                        row_offset: self.diff_y - rendered_row,
+                        row_offset: rendered_y - rendered_row,
                     });
                 }
                 rendered_row += height;
@@ -310,6 +351,31 @@ impl AppState {
         self.clamp_offsets();
     }
 
+    fn cycle_diff_presentation(&mut self, forward: bool) {
+        if self.view_mode != ViewMode::Diff {
+            return;
+        }
+        let anchor_row = self
+            .diff_y
+            .saturating_add(VIEW_ANCHOR_ROW)
+            .min(self.max_diff_y());
+        let anchor = self.current_anchor_at(anchor_row);
+        self.diff_presentation = if forward {
+            self.diff_presentation.next()
+        } else {
+            self.diff_presentation.previous()
+        };
+        self.diff_y = anchor
+            .as_ref()
+            .and_then(|anchor| {
+                self.selected_file()
+                    .map(|file| locate_anchor(file, anchor, self.diff_presentation))
+            })
+            .unwrap_or_default()
+            .saturating_sub(VIEW_ANCHOR_ROW);
+        self.clamp_offsets();
+    }
+
     fn scroll_content(&mut self, amount: isize) {
         match self.view_mode {
             ViewMode::Diff => self.scroll_diff(amount),
@@ -329,7 +395,10 @@ impl AppState {
     }
 
     fn move_hunk(&mut self, forward: bool) {
-        let starts = self.selected_file().map(hunk_starts).unwrap_or_default();
+        let starts = self
+            .selected_file()
+            .map(|file| hunk_starts(file, self.diff_presentation))
+            .unwrap_or_default();
         if starts.is_empty() {
             return;
         }
@@ -383,7 +452,7 @@ impl AppState {
 
     fn max_diff_y(&self) -> usize {
         self.selected_file()
-            .map(rendered_line_count)
+            .map(|file| rendered_line_count(file, self.diff_presentation))
             .unwrap_or_default()
             .saturating_sub(1)
     }
@@ -748,6 +817,8 @@ fn handle_key(key: KeyEvent, state: &mut AppState) -> AppAction {
                 ViewMode::Documentation => ViewMode::Diff,
             };
         }
+        KeyCode::Char('v') => state.cycle_diff_presentation(true),
+        KeyCode::Char('V') => state.cycle_diff_presentation(false),
         KeyCode::Char('/') => state.begin_search(),
         KeyCode::Tab => {
             state.focus = match state.focus {
@@ -825,31 +896,80 @@ fn row_source_lines(row: &DiffRow) -> (Option<usize>, Option<usize>) {
     }
 }
 
-pub(crate) fn rendered_line_count(file: &FileChange) -> usize {
-    usize::from(file.mode_changed || file.old_path != file.new_path)
-        + file
+pub(crate) fn rendered_line_count(file: &FileChange, presentation: DiffPresentation) -> usize {
+    match presentation {
+        DiffPresentation::Unified => {
+            usize::from(file.mode_changed || file.old_path != file.new_path)
+                + file
+                    .diff
+                    .hunks
+                    .iter()
+                    .map(|hunk| 1 + hunk.rows.iter().map(row_height).sum::<usize>())
+                    .sum::<usize>()
+        }
+        DiffPresentation::Before => file
+            .old_content
+            .as_ref()
+            .map_or(1, |content| content.text.lines().count().max(1)),
+        DiffPresentation::After => file
+            .new_content
+            .as_ref()
+            .map_or(1, |content| content.text.lines().count().max(1)),
+    }
+}
+
+pub(crate) fn hunk_starts(file: &FileChange, presentation: DiffPresentation) -> Vec<usize> {
+    match presentation {
+        DiffPresentation::Before => file
             .diff
             .hunks
             .iter()
-            .map(|hunk| 1 + hunk.rows.iter().map(row_height).sum::<usize>())
-            .sum::<usize>()
+            .map(|hunk| hunk.old_start.saturating_sub(1))
+            .collect(),
+        DiffPresentation::After => file
+            .diff
+            .hunks
+            .iter()
+            .map(|hunk| hunk.new_start.saturating_sub(1))
+            .collect(),
+        DiffPresentation::Unified => {
+            let mut offset = usize::from(file.mode_changed || file.old_path != file.new_path);
+            file.diff
+                .hunks
+                .iter()
+                .map(|hunk| {
+                    let start = offset;
+                    offset += 1 + hunk.rows.iter().map(row_height).sum::<usize>();
+                    start
+                })
+                .collect()
+        }
+    }
 }
 
-pub(crate) fn hunk_starts(file: &FileChange) -> Vec<usize> {
-    let mut offset = usize::from(file.mode_changed || file.old_path != file.new_path);
-    file.diff
-        .hunks
-        .iter()
-        .map(|hunk| {
-            let start = offset;
-            offset += 1 + hunk.rows.iter().map(row_height).sum::<usize>();
-            start
-        })
-        .collect()
-}
-
-fn locate_anchor(file: &FileChange, anchor: &SourceAnchor) -> usize {
-    let starts = hunk_starts(file);
+fn locate_anchor(
+    file: &FileChange,
+    anchor: &SourceAnchor,
+    presentation: DiffPresentation,
+) -> usize {
+    match presentation {
+        DiffPresentation::Before => {
+            return anchor
+                .old_line
+                .or(anchor.new_line)
+                .unwrap_or(1)
+                .saturating_sub(1);
+        }
+        DiffPresentation::After => {
+            return anchor
+                .new_line
+                .or(anchor.old_line)
+                .unwrap_or(1)
+                .saturating_sub(1);
+        }
+        DiffPresentation::Unified => {}
+    }
+    let starts = hunk_starts(file, DiffPresentation::Unified);
     let hunk_index = anchor.hunk.min(file.diff.hunks.len().saturating_sub(1));
     let Some(hunk) = file.diff.hunks.get(hunk_index) else {
         return 0;
@@ -878,11 +998,83 @@ fn locate_anchor(file: &FileChange, anchor: &SourceAnchor) -> usize {
     best.1
 }
 
+fn version_anchor(
+    file: &FileChange,
+    line: usize,
+    presentation: DiffPresentation,
+) -> Option<SourceAnchor> {
+    let (old_line, new_line) = match presentation {
+        DiffPresentation::Before => (Some(line), Some(map_source_line(file, line, true))),
+        DiffPresentation::After => (Some(map_source_line(file, line, false)), Some(line)),
+        DiffPresentation::Unified => return None,
+    };
+    let hunk = file
+        .diff
+        .hunks
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, hunk)| match presentation {
+            DiffPresentation::Before => hunk.old_start.abs_diff(line),
+            DiffPresentation::After => hunk.new_start.abs_diff(line),
+            DiffPresentation::Unified => 0,
+        })
+        .map(|(index, _)| index)
+        .unwrap_or_default();
+    Some(SourceAnchor {
+        hunk,
+        old_line,
+        new_line,
+        row_offset: 0,
+    })
+}
+
+fn map_source_line(file: &FileChange, wanted: usize, old_to_new: bool) -> usize {
+    let mut delta = 0isize;
+    for hunk in &file.diff.hunks {
+        let start = if old_to_new {
+            hunk.old_start
+        } else {
+            hunk.new_start
+        };
+        if wanted < start {
+            return wanted.saturating_add_signed(delta).max(1);
+        }
+        let len = if old_to_new {
+            hunk.old_len
+        } else {
+            hunk.new_len
+        };
+        if wanted < start.saturating_add(len.max(1)) {
+            let mut nearest = None;
+            for row in &hunk.rows {
+                let (old, new) = row_source_lines(row);
+                let (source, target) = if old_to_new { (old, new) } else { (new, old) };
+                if source == Some(wanted) {
+                    return target
+                        .or(nearest)
+                        .unwrap_or_else(|| start.saturating_add_signed(delta).max(1));
+                }
+                if let Some(target) = target {
+                    nearest = Some(target);
+                }
+            }
+            return nearest.unwrap_or_else(|| start.saturating_add_signed(delta).max(1));
+        }
+        let change = if old_to_new {
+            hunk.new_len as isize - hunk.old_len as isize
+        } else {
+            hunk.old_len as isize - hunk.new_len as isize
+        };
+        delta = delta.saturating_add(change);
+    }
+    wanted.saturating_add_signed(delta).max(1)
+}
+
 #[cfg(test)]
 mod tests {
     use std::{path::PathBuf, time::SystemTime};
 
-    use gitwatch_rust::model::{ChangeStatus, DiffHunk, FileDiff, FileKind};
+    use gitwatch_rust::model::{ChangeStatus, DiffHunk, FileDiff, FileKind, TextContent};
 
     use super::*;
 
@@ -984,6 +1176,74 @@ mod tests {
         assert_eq!(state.diff_y, 3);
         state.move_hunk(false);
         assert_eq!(state.diff_y, 0);
+    }
+
+    #[test]
+    fn view_key_cycles_presentations_and_keeps_corresponding_line_in_place() {
+        let mut changed = file("a.rs", 8);
+        changed.old_content = Some(TextContent {
+            text: (1..=30).map(|line| format!("old {line}\n")).collect(),
+            has_final_newline: true,
+        });
+        changed.new_content = Some(TextContent {
+            text: (1..=30)
+                .flat_map(|line| {
+                    if line == 11 {
+                        vec!["inserted\n".to_owned(), format!("new {line}\n")]
+                    } else {
+                        vec![format!("new {line}\n")]
+                    }
+                })
+                .collect(),
+            has_final_newline: true,
+        });
+        changed.diff.hunks[0] = DiffHunk {
+            old_start: 8,
+            old_len: 6,
+            new_start: 8,
+            new_len: 7,
+            rows: vec![
+                DiffRow::Equal {
+                    old_line: 10,
+                    new_line: 10,
+                    content: "line 10".into(),
+                },
+                DiffRow::Insert {
+                    new_line: 11,
+                    content: "inserted".into(),
+                },
+                DiffRow::Equal {
+                    old_line: 11,
+                    new_line: 12,
+                    content: "line 11".into(),
+                },
+                DiffRow::Equal {
+                    old_line: 12,
+                    new_line: 13,
+                    content: "line 12".into(),
+                },
+                DiffRow::Equal {
+                    old_line: 13,
+                    new_line: 14,
+                    content: "line 13".into(),
+                },
+            ],
+        };
+        let mut state = state(1, vec![changed]);
+        state.diff_presentation = DiffPresentation::Before;
+        state.diff_y = 3;
+        let next = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE);
+        let previous = KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT);
+
+        handle_key(next, &mut state);
+
+        assert_eq!(state.diff_presentation, DiffPresentation::After);
+        assert_eq!(state.diff_y, 4);
+        handle_key(previous, &mut state);
+        assert_eq!(state.diff_presentation, DiffPresentation::Before);
+        assert_eq!(state.diff_y, 3);
+        handle_key(next, &mut state);
+        assert_eq!(state.diff_presentation, DiffPresentation::After);
     }
 
     #[test]

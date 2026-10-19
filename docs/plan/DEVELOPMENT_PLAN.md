@@ -25,8 +25,8 @@ blueprint.
   state. A tree can be reconsidered only after the core viewer is stable.
 - Use the system `git` executable for repository discovery and status. Use
   NUL-delimited machine-readable output and never parse human-oriented output.
-- Build one normalized diff model, then render unified, side-by-side, and
-  top-bottom views from it. Presentation modes do not launch their own Git
+- Build one normalized diff model, then render unified, before-version, and
+  after-version views from it. Presentation modes do not launch their own Git
   commands.
 - Use `ratatui` and `crossterm` for the interface, `notify` for filesystem hints,
   `similar` for line alignment, and `syntect` for syntax highlighting.
@@ -104,12 +104,11 @@ DiffRow
   optional old and new line number/content
 ```
 
-`DiffRow` is the common source for all renderers. Unified mode emits context,
-deletion, and insertion rows; side-by-side places the optional old/new cells on
-one row; top-bottom groups the old and new sides of each hunk. This makes hunk
-navigation identical in every mode.
+`DiffRow` is the common source for the unified renderer and source-line mapping.
+The before and after renderers use the complete bounded file contents from the
+same snapshot. This makes hunk navigation and view-to-view anchoring consistent.
 
-`AppState` contains focus, selected file key/index, mode, per-file/per-mode scroll
+`AppState` contains focus, selected file key/index, mode, presentation and scroll
 positions, terminal dimensions, pending/refresh/error indicators, and the latest
 accepted snapshot generation. Repository data remains immutable after a worker
 publishes it.
@@ -117,7 +116,8 @@ publishes it.
 For refresh preservation, use a file key based on the current path, with the old
 path as a rename fallback. Preserve a logical anchor where possible: selected
 hunk plus nearby old/new source line. Fall back to proportional vertical offset,
-then clamp. Preserve horizontal offset independently for each presentation mode.
+then clamp. When cycling presentations, map the source line near the tenth
+viewport row and retain that approximate screen position.
 
 ## 5. Read-only Git and snapshot strategy
 
@@ -251,15 +251,14 @@ the width with reasonable minimums; the diff receives the remainder.
   status area when truncated.
 - Diff: syntax-aware rows, source line numbers, hunk headers, visible additions
   and deletions, and an explicit message for non-text/limited content.
-- Footer: `Tab focus  1/2/3 mode  n/p hunk  r refresh  q quit`, adapted when
+- Footer: `v/V view  Tab focus  n/p hunk  q quit`, adapted when
   width is limited.
 - Empty state: `Working tree clean — waiting for changes...`.
 - Error state: retain the last good snapshot, show the error non-modally, and
   keep retrying. Startup errors before a valid repository exists may exit.
 
-Do not silently replace side-by-side mode in a narrow terminal. Instead, retain
-the mode, give each side a minimal viewport, allow horizontal scrolling, and show
-a short narrow-terminal hint if content is severely constrained.
+Before and after versions retain horizontal scrolling for long lines in narrow
+terminals.
 
 Input mapping follows the blueprint. Arrow keys and `j`/`k` act on the focused
 pane; Page Up/Down, Home/End are added as conventional aliases. File selection
@@ -345,15 +344,16 @@ commits update correctly while navigation remains responsive.
 
 ### Phase 4 — Alternate presentations
 
-**Status: Not started.**
+**Status: Complete.**
 
-- Render side-by-side aligned old/new cells from `DiffRow`.
-- Render top-bottom before/after hunk sections from the same rows.
-- Preserve mode while changing files and refreshing; maintain per-mode scrolling.
-- Verify long-line and narrow-terminal behavior without silently changing mode.
+- Cycle unified, complete before, and complete after views forward with `v` and backward with `V`.
+- Map corresponding old/new source lines near the tenth viewport row while cycling.
+- Preserve the selected presentation while changing files and refreshing.
+- Retain horizontal scrolling for long lines and narrow terminals.
 
-Exit criterion: keys `1`, `2`, and `3` switch correct views immediately, and
-hunk navigation refers to the same logical hunks in all modes.
+Exit criterion: `v` and `V` cycle the three correct views immediately, corresponding
+source lines remain in view, and hunk navigation refers to the same logical
+hunks in all modes.
 
 ### Phase 5 — Hardening and release readiness
 
@@ -381,9 +381,9 @@ core diff presentations and release hardening so it does not delay or blur the
 original live-diff goal.
 
 Add a documentation browsing mode toggled with `d` (`d` for documentation).
-This is an application mode, not a fourth diff presentation: keys `1`, `2`, and
-`3` continue to select unified, side-by-side, and top-bottom presentation within
-diff mode. Pressing `d` shows documentation and pressing it again returns to the
+This is an application mode, not a fourth diff presentation: `v` and `V`
+continue to cycle unified, before, and after presentation within diff mode. Pressing `d`
+shows documentation and pressing it again returns to the
 previous diff presentation, preserving both modes' selections and scroll
 positions.
 
@@ -438,7 +438,7 @@ position; and another `d` restores the prior diff view unchanged.
 - Porcelain-v2 NUL parser: every relevant record, truncated/invalid records,
   spaces, tabs, newlines, Unicode, and non-UTF-8 paths on Unix.
 - Diff model: context grouping, replace alignment, insert/delete-only hunks,
-  trailing newline, side-by-side blank cells, and top-bottom grouping.
+  trailing newline, full-file version rendering, and source-line mapping.
 - Scheduler: isolated event, burst, continuous events reaching maximum delay,
   poll interaction, event during refresh, manual refresh, and result generations.
 - App reducer: selection survival, nearest-file fallback, clean transition,
@@ -508,7 +508,7 @@ surprisingly hidden.
 | Files change midway through a snapshot | Treat snapshots as eventually consistent, detect obvious metadata changes, and immediately schedule a follow-up. |
 | Watcher misses commit/ref events or emits a storm | Watch minimal metadata, filter hints, coalesce requests, and reconcile by polling. |
 | Stale background results disrupt reading | Use request generations, a single worker, immutable snapshots, and explicit anchor restoration. |
-| Side-by-side alignment diverges from unified output | Generate all modes from the same normalized `DiffRow`/hunk model and cross-test them. |
+| Before/after view alignment loses the reader's place | Map old/new source lines through the normalized `DiffRow`/hunk model and cross-test insertions and deletions. |
 | Syntax and diff styles become unreadable | Make diff semantics dominant, use conservative colors, and manually test light/dark terminals. |
 | Unusual paths corrupt parsing or selection | Parse `-z` bytes, retain lossless path identity, and escape only for display. |
 | Large/binary content freezes the TUI | Detect early, apply bounded reads/output, and render explanatory placeholders. |

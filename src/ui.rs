@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{collections::HashSet, path::Path};
 
 use ratatui::{
     Frame,
@@ -11,7 +11,7 @@ use ratatui::{
 use gitwatch_rust::model::{ChangeStatus, DiffRow, FileChange, FileKind};
 
 use crate::{
-    app::{AppState, Focus, ViewMode},
+    app::{AppState, DiffPresentation, Focus, ViewMode},
     highlight::SyntaxHighlighter,
 };
 
@@ -27,7 +27,11 @@ pub(crate) fn render(frame: &mut Frame<'_>, state: &mut AppState, highlighter: &
                 } else {
                     "Working tree clean — waiting for changes...".to_owned()
                 },
-                " Unified diff ",
+                match state.diff_presentation {
+                    DiffPresentation::Unified => " Unified diff ",
+                    DiffPresentation::Before => " Before version ",
+                    DiffPresentation::After => " After version ",
+                },
             ),
             ViewMode::Documentation => (
                 if let Some(error) = &state.error {
@@ -101,7 +105,11 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         ("live", Color::Green)
     };
     let mode = match state.view_mode {
-        ViewMode::Diff => "unified",
+        ViewMode::Diff => match state.diff_presentation {
+            DiffPresentation::Unified => "unified",
+            DiffPresentation::Before => "before",
+            DiffPresentation::After => "after",
+        },
         ViewMode::Documentation => "documentation",
     };
     let mut spans = vec![
@@ -187,10 +195,26 @@ fn render_diff(
         let Some(file) = state.selected_file() else {
             return;
         };
-        (
-            unified_lines(file, highlighter),
-            format!(" Unified — {} ", display_path(file.path())),
-        )
+        match state.diff_presentation {
+            DiffPresentation::Unified => (
+                unified_lines(file, highlighter),
+                format!(" Unified — {} ", display_path(file.path())),
+            ),
+            DiffPresentation::Before => (
+                version_lines(file, DiffPresentation::Before, highlighter),
+                format!(
+                    " Before — {} ",
+                    display_path(version_path(file, DiffPresentation::Before))
+                ),
+            ),
+            DiffPresentation::After => (
+                version_lines(file, DiffPresentation::After, highlighter),
+                format!(
+                    " After — {} ",
+                    display_path(version_path(file, DiffPresentation::After))
+                ),
+            ),
+        }
     };
     state.update_search_content(lines.iter().map(line_text).collect());
     highlight_search(&mut lines, state.search_query());
@@ -303,12 +327,11 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     } else if state.view_mode == ViewMode::Documentation && area.width < 72 {
         " d diffs  / search  Tab focus  ↑↓ move  q quit".to_owned()
     } else if state.view_mode == ViewMode::Documentation {
-        " d diffs  / search  Tab focus  ↑↓/j/k move  ←→/h/l scroll  t shell  r refresh  q quit"
-            .to_owned()
+        " d diffs  / search  Tab focus  ↑↓/j/k move  ←→/h/l scroll  t shell  q quit".to_owned()
     } else if area.width < 72 {
-        " d docs  / search  Tab focus  ↑↓ move  n/p hunk  q quit".to_owned()
+        " v/V view  d docs  / search  ↑↓ move  n/p hunk  q quit".to_owned()
     } else {
-        " d docs  / search  Tab focus  ↑↓/j/k move  ←→/h/l scroll  n/p hunk  t shell  r refresh  q quit".to_owned()
+        " v/V view  d docs  / search  Tab focus  ↑↓/j/k move  ←→/h/l scroll  n/p hunk  t shell  q quit".to_owned()
     };
     frame.render_widget(
         Paragraph::new(text).style(Style::default().add_modifier(Modifier::DIM)),
@@ -496,6 +519,105 @@ fn unified_lines(file: &FileChange, highlighter: &SyntaxHighlighter) -> Vec<Line
     lines
 }
 
+fn version_lines(
+    file: &FileChange,
+    presentation: DiffPresentation,
+    highlighter: &SyntaxHighlighter,
+) -> Vec<Line<'static>> {
+    let content = match presentation {
+        DiffPresentation::Before => file.old_content.as_ref(),
+        DiffPresentation::After => file.new_content.as_ref(),
+        DiffPresentation::Unified => unreachable!("unified rendering uses unified_lines"),
+    };
+    let Some(content) = content else {
+        let label = match presentation {
+            DiffPresentation::Before => "before",
+            DiffPresentation::After => "after",
+            DiffPresentation::Unified => unreachable!(),
+        };
+        return vec![Line::styled(
+            format!(" No {label} text version is available."),
+            Style::default().fg(Color::Yellow),
+        )];
+    };
+    if content.text.is_empty() {
+        return vec![Line::styled(
+            " (empty file)",
+            Style::default().add_modifier(Modifier::DIM),
+        )];
+    }
+    let changed_lines = version_changed_lines(file, presentation);
+    content
+        .text
+        .lines()
+        .enumerate()
+        .map(|(index, text)| {
+            let number = index + 1;
+            version_line(
+                number,
+                text,
+                version_path(file, presentation),
+                highlighter,
+                changed_lines
+                    .contains(&number)
+                    .then(|| version_change_style(presentation)),
+            )
+        })
+        .collect()
+}
+
+fn version_changed_lines(file: &FileChange, presentation: DiffPresentation) -> HashSet<usize> {
+    file.diff
+        .hunks
+        .iter()
+        .flat_map(|hunk| &hunk.rows)
+        .filter_map(|row| match (presentation, row) {
+            (
+                DiffPresentation::Before,
+                DiffRow::Delete { old_line, .. } | DiffRow::Replace { old_line, .. },
+            ) => Some(*old_line),
+            (
+                DiffPresentation::After,
+                DiffRow::Insert { new_line, .. } | DiffRow::Replace { new_line, .. },
+            ) => Some(*new_line),
+            _ => None,
+        })
+        .collect()
+}
+
+fn version_change_style(presentation: DiffPresentation) -> Style {
+    match presentation {
+        DiffPresentation::Before => Style::default().bg(Color::Rgb(64, 20, 24)),
+        DiffPresentation::After => Style::default().bg(Color::Rgb(16, 58, 36)),
+        DiffPresentation::Unified => Style::default(),
+    }
+}
+
+fn version_path(file: &FileChange, presentation: DiffPresentation) -> &Path {
+    match presentation {
+        DiffPresentation::Before => file.old_path.as_deref(),
+        DiffPresentation::After => file.new_path.as_deref(),
+        DiffPresentation::Unified => None,
+    }
+    .unwrap_or(&file.key)
+}
+
+fn version_line(
+    number: usize,
+    content: &str,
+    path: &Path,
+    highlighter: &SyntaxHighlighter,
+    semantic_style: Option<Style>,
+) -> Line<'static> {
+    let semantic_style = semantic_style.unwrap_or_default();
+    let mut spans = vec![Span::styled(
+        format!("{number:>6}  "),
+        semantic_style.add_modifier(Modifier::DIM),
+    )];
+    spans.extend(highlighter.line(path, content));
+    Line::from(spans).style(semantic_style)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn source_line(
     prefix: char,
@@ -570,7 +692,58 @@ fn display_path(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use gitwatch_rust::model::{DiffHunk, FileDiff, TextContent};
+
     use super::*;
+
+    fn text_file() -> FileChange {
+        FileChange {
+            key: PathBuf::from("src/main.rs"),
+            old_path: Some(PathBuf::from("src/main.rs")),
+            new_path: Some(PathBuf::from("src/main.rs")),
+            status: ChangeStatus::Modified,
+            staged: false,
+            unstaged: true,
+            kind: FileKind::Text,
+            old_content: Some(TextContent {
+                text: "fn before() {}\nlet removed = true;\n".into(),
+                has_final_newline: true,
+            }),
+            new_content: Some(TextContent {
+                text: "fn after() {}\nlet value = 1;\n".into(),
+                has_final_newline: true,
+            }),
+            old_mode: Some(0o100644),
+            new_mode: Some(0o100644),
+            mode_changed: false,
+            diff: FileDiff {
+                hunks: vec![DiffHunk {
+                    old_start: 1,
+                    old_len: 2,
+                    new_start: 1,
+                    new_len: 2,
+                    rows: vec![
+                        DiffRow::Replace {
+                            old_line: 1,
+                            old_content: "fn before() {}".into(),
+                            new_line: 1,
+                            new_content: "fn after() {}".into(),
+                        },
+                        DiffRow::Delete {
+                            old_line: 2,
+                            content: "let removed = true;".into(),
+                        },
+                        DiffRow::Insert {
+                            new_line: 2,
+                            content: "let value = 1;".into(),
+                        },
+                    ],
+                }],
+            },
+        }
+    }
 
     #[test]
     fn status_symbols_cover_every_change_kind() {
@@ -601,5 +774,29 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect::<String>();
         assert_eq!(highlighted, "oob");
+    }
+
+    #[test]
+    fn version_views_render_complete_numbered_file_contents() {
+        let file = text_file();
+        let highlighter = SyntaxHighlighter::new();
+
+        let before = version_lines(&file, DiffPresentation::Before, &highlighter);
+        let after = version_lines(&file, DiffPresentation::After, &highlighter);
+
+        assert_eq!(before.len(), 2);
+        assert!(line_text(&before[0]).contains("1  fn before() {}"));
+        assert!(
+            before
+                .iter()
+                .all(|line| line.style.bg == Some(Color::Rgb(64, 20, 24)))
+        );
+        assert_eq!(after.len(), 2);
+        assert!(line_text(&after[1]).contains("2  let value = 1;"));
+        assert!(
+            after
+                .iter()
+                .all(|line| line.style.bg == Some(Color::Rgb(16, 58, 36)))
+        );
     }
 }

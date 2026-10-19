@@ -63,14 +63,11 @@ Selecting files must never change repository state.
 Provide three presentation modes:
 
 1. **Unified:** Conventional Git-style diff with context, additions, and deletions.
-2. **Side-by-side:** Original content on the left and modified content on the right, with corresponding lines aligned.
-3. **Top-bottom:** Original and modified content displayed vertically, with clear correspondence between changed sections.
+2. **Before:** Complete original file content.
+3. **After:** Complete modified file content.
 
-Switch modes using:
-
-- `1` — Unified.
-- `2` — Side-by-side.
-- `3` — Top-bottom.
+Cycle modes forward with `v` and backward with `V`. Keep a corresponding old/new source line near the tenth
+viewport row where practical so switching does not lose the reader's place.
 
 The selected mode should remain active when switching files.
 
@@ -182,9 +179,7 @@ Prefer preserving a visible diff hunk or source-line anchor when practical, but 
 | `Tab` | Switch focus between file list and diff |
 | `t` | Open an interactive shell at the repository root; `exit` returns to the TUI |
 | `j` / `k` | Scroll or navigate within focused pane |
-| `1` | Unified diff |
-| `2` | Side-by-side diff |
-| `3` | Top-bottom diff |
+| `v` / `V` | Cycle forward / backward through unified, before, and after views |
 | `n` / `p` | Next / previous diff hunk |
 | `←` / `→` | Horizontal scrolling when appropriate |
 | `r` | Force immediate refresh |
@@ -216,9 +211,10 @@ Directories should not consume more space than necessary.
 
 The larger pane displaying the selected file's diff.
 
-The default presentation mode should be unified, with the user able to switch modes immediately.
+The default presentation mode should be unified, with the user able to cycle
+immediately through the complete before and after versions.
 
-The right pane should maximize the available width, especially for side-by-side comparisons.
+The right pane should maximize the available width for long source lines.
 
 ### Header
 
@@ -314,7 +310,8 @@ For example, maintain a normalized representation containing:
 - Before/after line numbers.
 - Added, removed, and context lines.
 
-The unified, side-by-side, and top-bottom renderers should consume a shared underlying representation rather than independently invoke Git with unrelated options.
+The unified, before-version, and after-version renderers should consume a shared
+snapshot rather than independently invoke Git with unrelated options.
 
 ### Highlighting
 
@@ -478,8 +475,8 @@ Automated tests should cover at least:
 3. Recognition of untracked and deleted files.
 4. Removal of committed changes from the display.
 5. Diff hunk parsing and alignment.
-6. Correct construction of side-by-side rows.
-7. Correct construction of top-bottom views.
+6. Correct construction of complete before and after views.
+7. Source-line alignment when cycling views.
 8. Debounce timer behavior.
 9. Maximum refresh delay under continuous changes.
 10. Selection and scroll-position preservation.
@@ -502,7 +499,7 @@ The implementation is successful when:
 - The changed-file list updates automatically when Codex or Claude Code edits files.
 - The diff pane updates automatically after the configured quiet period.
 - Continuous editing cannot prevent eventual refresh indefinitely.
-- Unified, side-by-side, and top-bottom modes all work.
+- Unified, before-version, and after-version modes all work.
 - Syntax highlighting is visible and appropriate for common source languages.
 - The user can navigate changed files and diff hunks entirely with the keyboard.
 - Live refreshes do not unnecessarily reset selection or scroll positions.
@@ -526,7 +523,7 @@ Prioritize the following order:
 2. Functional navigable TUI.
 3. Correct unified diff display.
 4. Live update scheduling.
-5. Side-by-side and top-bottom rendering.
+5. Before-version and after-version rendering.
 6. Syntax highlighting and presentation polish.
 7. Edge cases and automated testing.
 
