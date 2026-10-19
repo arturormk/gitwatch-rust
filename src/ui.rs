@@ -183,7 +183,7 @@ fn render_diff(
     state: &mut AppState,
     highlighter: &SyntaxHighlighter,
 ) {
-    let (lines, title) = {
+    let (mut lines, title) = {
         let Some(file) = state.selected_file() else {
             return;
         };
@@ -192,6 +192,8 @@ fn render_diff(
             format!(" Unified — {} ", display_path(file.path())),
         )
     };
+    state.update_search_content(lines.iter().map(line_text).collect());
+    highlight_search(&mut lines, state.search_query());
     let visible_height = area.height.saturating_sub(2) as usize;
     state.diff_y = state
         .diff_y
@@ -262,10 +264,12 @@ fn render_document_content(
     };
     let title = format!(" Rendered — {} ", display_path(&document.path));
     let content_width = usize::from(area.width.saturating_sub(2)).max(1);
-    let lines = state
+    let mut lines = state
         .markdown_cache
         .lines(&document, highlighter)
         .layout(content_width);
+    state.update_search_content(lines.iter().map(line_text).collect());
+    highlight_search(&mut lines, state.search_query());
     let rendered_height = lines.len();
     let border = if state.focus == Focus::Diff {
         Color::Cyan
@@ -290,22 +294,83 @@ fn render_document_content(
 }
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
-    let text = if let Some(error) = &state.error {
+    let text = if let Some(prompt) = state.search_prompt() {
+        format!("/{prompt}")
+    } else if let Some(error) = &state.error {
         format!(" error: {error}  •  r retry  q quit")
+    } else if let Some(status) = state.search_status() {
+        format!(" {status}  n/N next/previous  / new search  Esc clear")
     } else if state.view_mode == ViewMode::Documentation && area.width < 72 {
-        " d diffs  Tab focus  ↑↓ move  t shell  r refresh  q quit".to_owned()
+        " d diffs  / search  Tab focus  ↑↓ move  q quit".to_owned()
     } else if state.view_mode == ViewMode::Documentation {
-        " d diffs  Tab focus  ↑↓/j/k move  ←→/h/l scroll  t shell  r refresh  q quit".to_owned()
-    } else if area.width < 72 {
-        " d docs  Tab focus  ↑↓ move  n/p hunk  t shell  r refresh  q quit".to_owned()
-    } else {
-        " d docs  Tab focus  ↑↓/j/k move  ←→/h/l scroll  n/p hunk  t shell  r refresh  q quit"
+        " d diffs  / search  Tab focus  ↑↓/j/k move  ←→/h/l scroll  t shell  r refresh  q quit"
             .to_owned()
+    } else if area.width < 72 {
+        " d docs  / search  Tab focus  ↑↓ move  n/p hunk  q quit".to_owned()
+    } else {
+        " d docs  / search  Tab focus  ↑↓/j/k move  ←→/h/l scroll  n/p hunk  t shell  r refresh  q quit".to_owned()
     };
     frame.render_widget(
         Paragraph::new(text).style(Style::default().add_modifier(Modifier::DIM)),
         area,
     );
+    if let Some(prompt) = state.search_prompt() {
+        let cursor = 1usize
+            .saturating_add(unicode_width::UnicodeWidthStr::width(prompt))
+            .min(usize::from(area.width.saturating_sub(1)));
+        frame.set_cursor_position((area.x.saturating_add(cursor as u16), area.y));
+    }
+}
+
+fn line_text(line: &Line<'_>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
+fn highlight_search(lines: &mut [Line<'static>], query: &str) {
+    if query.is_empty() {
+        return;
+    }
+    let highlight = Style::default().fg(Color::Black).bg(Color::Yellow);
+    for line in lines {
+        let text = line_text(line);
+        let matches = text
+            .match_indices(query)
+            .map(|(start, found)| start..start + found.len())
+            .collect::<Vec<_>>();
+        if matches.is_empty() {
+            continue;
+        }
+        let mut offset = 0;
+        let mut spans = Vec::new();
+        for span in &line.spans {
+            let content = span.content.as_ref();
+            let span_start = offset;
+            let span_end = offset + content.len();
+            let mut cursor = 0;
+            for found in &matches {
+                let start = found.start.max(span_start).min(span_end) - span_start;
+                let end = found.end.max(span_start).min(span_end) - span_start;
+                if start > cursor {
+                    spans.push(Span::styled(content[cursor..start].to_owned(), span.style));
+                }
+                if end > start {
+                    spans.push(Span::styled(
+                        content[start..end].to_owned(),
+                        span.style.patch(highlight),
+                    ));
+                    cursor = end;
+                }
+            }
+            if cursor < content.len() {
+                spans.push(Span::styled(content[cursor..].to_owned(), span.style));
+            }
+            offset = span_end;
+        }
+        line.spans = spans;
+    }
 }
 
 fn unified_lines(file: &FileChange, highlighter: &SyntaxHighlighter) -> Vec<Line<'static>> {
@@ -517,5 +582,24 @@ mod tests {
     #[test]
     fn control_characters_are_escaped_for_terminal_output() {
         assert_eq!(display_path(Path::new("a\tb\nc")), "a\\tb\\nc");
+    }
+
+    #[test]
+    fn search_highlighting_can_cross_styled_spans() {
+        let mut lines = vec![Line::from(vec![
+            Span::styled("foo", Style::default().fg(Color::Red)),
+            Span::styled("bar", Style::default().fg(Color::Green)),
+        ])];
+
+        highlight_search(&mut lines, "oob");
+
+        assert_eq!(line_text(&lines[0]), "foobar");
+        let highlighted = lines[0]
+            .spans
+            .iter()
+            .filter(|span| span.style.bg == Some(Color::Yellow))
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert_eq!(highlighted, "oob");
     }
 }

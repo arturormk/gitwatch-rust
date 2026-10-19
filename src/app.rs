@@ -4,9 +4,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{
-    self, Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind,
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+    MouseEventKind,
 };
 use ratatui::layout::Rect;
+use unicode_width::UnicodeWidthStr;
 
 use gitwatch_rust::document::{
     DocumentContent, DocumentationSnapshot, MarkdownDocument, collect_documents,
@@ -49,6 +51,22 @@ struct SourceAnchor {
     row_offset: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SearchMatch {
+    line: usize,
+    column: usize,
+}
+
+#[derive(Debug, Default)]
+struct SearchState {
+    editing: bool,
+    input: String,
+    query: String,
+    lines: Vec<String>,
+    matches: Vec<SearchMatch>,
+    current: Option<usize>,
+}
+
 #[derive(Debug)]
 pub(crate) struct AppState {
     pub(crate) snapshot: RepositorySnapshot,
@@ -65,6 +83,7 @@ pub(crate) struct AppState {
     pub(crate) document_x: usize,
     document_positions: HashMap<PathBuf, (usize, usize)>,
     pub(crate) markdown_cache: MarkdownCache,
+    search: SearchState,
     pub(crate) error: Option<String>,
     pub(crate) pending: bool,
     pub(crate) refreshing: bool,
@@ -91,6 +110,7 @@ impl AppState {
             document_x: 0,
             document_positions: HashMap::new(),
             markdown_cache: MarkdownCache::default(),
+            search: SearchState::default(),
             error: None,
             pending: false,
             refreshing: false,
@@ -367,6 +387,131 @@ impl AppState {
             .unwrap_or_default()
             .saturating_sub(1)
     }
+
+    pub(crate) fn update_search_content(&mut self, lines: Vec<String>) {
+        if self.search.lines != lines {
+            self.search.lines = lines;
+            self.search.current = None;
+            self.rebuild_search_matches();
+        }
+    }
+
+    pub(crate) fn search_query(&self) -> &str {
+        &self.search.query
+    }
+
+    pub(crate) fn search_prompt(&self) -> Option<&str> {
+        self.search.editing.then_some(self.search.input.as_str())
+    }
+
+    pub(crate) fn search_status(&self) -> Option<String> {
+        if self.search.editing || self.search.query.is_empty() {
+            return None;
+        }
+        let position = self.search.current.map_or(0, |index| index + 1);
+        Some(format!(
+            "/{}  {position}/{}",
+            self.search.query,
+            self.search.matches.len()
+        ))
+    }
+
+    fn begin_search(&mut self) {
+        self.focus = Focus::Diff;
+        self.search.editing = true;
+        self.search.input.clear();
+    }
+
+    fn clear_search(&mut self) {
+        self.search.editing = false;
+        self.search.input.clear();
+        self.search.query.clear();
+        self.search.matches.clear();
+        self.search.current = None;
+    }
+
+    fn rebuild_search_matches(&mut self) {
+        self.search.matches.clear();
+        if self.search.query.is_empty() {
+            return;
+        }
+        for (line, text) in self.search.lines.iter().enumerate() {
+            self.search
+                .matches
+                .extend(
+                    text.match_indices(&self.search.query)
+                        .map(|(column, _)| SearchMatch {
+                            line,
+                            column: UnicodeWidthStr::width(&text[..column]),
+                        }),
+                );
+        }
+        if self
+            .search
+            .current
+            .is_some_and(|index| index >= self.search.matches.len())
+        {
+            self.search.current = None;
+        }
+    }
+
+    fn finish_search(&mut self) {
+        self.search.editing = false;
+        if !self.search.input.is_empty() {
+            self.search.query.clone_from(&self.search.input);
+            self.search.current = None;
+            self.rebuild_search_matches();
+        }
+        self.move_search(true, true);
+    }
+
+    fn move_search(&mut self, forward: bool, include_viewport: bool) {
+        if self.search.matches.is_empty() {
+            self.search.current = None;
+            return;
+        }
+        let viewport = match self.view_mode {
+            ViewMode::Diff => self.diff_y,
+            ViewMode::Documentation => self.document_y,
+        };
+        let next = if let Some(current) = self.search.current {
+            if forward {
+                (current + 1) % self.search.matches.len()
+            } else {
+                current
+                    .checked_sub(1)
+                    .unwrap_or(self.search.matches.len() - 1)
+            }
+        } else if forward {
+            self.search
+                .matches
+                .iter()
+                .position(|found| {
+                    found.line > viewport || (include_viewport && found.line == viewport)
+                })
+                .unwrap_or(0)
+        } else {
+            self.search
+                .matches
+                .iter()
+                .rposition(|found| {
+                    found.line < viewport || (include_viewport && found.line == viewport)
+                })
+                .unwrap_or(self.search.matches.len() - 1)
+        };
+        self.search.current = Some(next);
+        let found = self.search.matches[next];
+        match self.view_mode {
+            ViewMode::Diff => {
+                self.diff_y = found.line;
+                self.diff_x = found.column.saturating_sub(4);
+            }
+            ViewMode::Documentation => {
+                self.document_y = found.line;
+                self.document_x = found.column.saturating_sub(4);
+            }
+        }
+    }
 }
 
 pub fn run(terminal: &mut TerminalSession, cli: &Cli) -> Result<()> {
@@ -570,7 +715,28 @@ fn in_inner(area: Rect, column: u16, row: u16) -> bool {
 }
 
 fn handle_key(key: KeyEvent, state: &mut AppState) -> AppAction {
+    if state.search.editing {
+        match key.code {
+            KeyCode::Esc => state.search.editing = false,
+            KeyCode::Enter => state.finish_search(),
+            KeyCode::Backspace => {
+                state.search.input.pop();
+            }
+            KeyCode::Char(character)
+                if !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                state.search.input.push(character);
+            }
+            _ => {}
+        }
+        return AppAction::Continue;
+    }
     match key.code {
+        KeyCode::Esc if !state.search.query.is_empty() => {
+            state.clear_search();
+        }
         KeyCode::Char('q') | KeyCode::Esc => return AppAction::Quit,
         KeyCode::Char('r') => return AppAction::Refresh,
         KeyCode::Char('t') => return AppAction::Shell,
@@ -580,6 +746,7 @@ fn handle_key(key: KeyEvent, state: &mut AppState) -> AppAction {
                 ViewMode::Documentation => ViewMode::Diff,
             };
         }
+        KeyCode::Char('/') => state.begin_search(),
         KeyCode::Tab => {
             state.focus = match state.focus {
                 Focus::Files => Focus::Diff,
@@ -622,6 +789,8 @@ fn handle_key(key: KeyEvent, state: &mut AppState) -> AppAction {
         KeyCode::Right | KeyCode::Char('l') if state.focus == Focus::Diff => {
             state.scroll_horizontal(4);
         }
+        KeyCode::Char('n') if !state.search.query.is_empty() => state.move_search(true, false),
+        KeyCode::Char('N') if !state.search.query.is_empty() => state.move_search(false, false),
         KeyCode::Char('n') if state.view_mode == ViewMode::Diff => state.move_hunk(true),
         KeyCode::Char('p') if state.view_mode == ViewMode::Diff => state.move_hunk(false),
         _ => {}
@@ -820,6 +989,61 @@ mod tests {
         let mut state = state(1, vec![]);
         let key = KeyEvent::new(KeyCode::Char('t'), crossterm::event::KeyModifiers::NONE);
         assert_eq!(handle_key(key, &mut state), AppAction::Shell);
+    }
+
+    #[test]
+    fn slash_focuses_content_and_searches_rendered_lines() {
+        let mut state = state(1, vec![file("a", 1)]);
+        state.update_search_content(vec![
+            "first line".into(),
+            "a line with needle far enough across".into(),
+            "last needle".into(),
+        ]);
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+
+        assert_eq!(
+            handle_key(key(KeyCode::Char('/')), &mut state),
+            AppAction::Continue
+        );
+        assert_eq!(state.focus, Focus::Diff);
+        assert_eq!(state.search_prompt(), Some(""));
+        for character in "needle".chars() {
+            handle_key(key(KeyCode::Char(character)), &mut state);
+        }
+        handle_key(key(KeyCode::Enter), &mut state);
+
+        assert_eq!(state.search_prompt(), None);
+        assert_eq!(state.search_status().as_deref(), Some("/needle  1/2"));
+        assert_eq!(state.diff_y, 1);
+        assert!(state.diff_x > 0);
+
+        handle_key(key(KeyCode::Char('n')), &mut state);
+        assert_eq!(state.diff_y, 2);
+        handle_key(key(KeyCode::Char('N')), &mut state);
+        assert_eq!(state.diff_y, 1);
+        assert_eq!(
+            handle_key(key(KeyCode::Esc), &mut state),
+            AppAction::Continue
+        );
+        assert_eq!(state.search_status(), None);
+    }
+
+    #[test]
+    fn search_input_captures_commands_and_escape_only_cancels_input() {
+        let mut state = state(1, vec![file("a", 1)]);
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+
+        handle_key(key(KeyCode::Char('/')), &mut state);
+        assert_eq!(
+            handle_key(key(KeyCode::Char('q')), &mut state),
+            AppAction::Continue
+        );
+        assert_eq!(state.search_prompt(), Some("q"));
+        assert_eq!(
+            handle_key(key(KeyCode::Esc), &mut state),
+            AppAction::Continue
+        );
+        assert_eq!(state.search_prompt(), None);
     }
 
     #[test]

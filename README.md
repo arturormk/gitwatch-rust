@@ -68,13 +68,15 @@ already running, it queues one follow-up refresh.
 | Key | Action |
 |---|---|
 | `q` | Quit |
-| `Esc` | Quit |
 | `Tab` | Switch focus between file list and diff |
 | `j` / `k`, arrows | Navigate the focused pane |
 | `h` / `l`, left/right arrows | Scroll the diff horizontally |
+| `/<text>` | Search the right pane (`Enter` to confirm, `Esc` to cancel) |
+| `n` / `N` | Next / previous search match (after searching) |
+| `Esc` | Clear an active search; otherwise quit |
 | `Page Up` / `Page Down` | Move by a larger step |
 | `Home` / `End` | Move to the beginning/end |
-| `n` / `p` | Next / previous hunk |
+| `n` / `p` | Next / previous hunk when no search is active |
 | `t` | Open an interactive shell at the repository root; `exit` returns to Gitwatch |
 | `d` | Toggle between live diffs and rendered repository documentation |
 | `r` | Refresh immediately |
