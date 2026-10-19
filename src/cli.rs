@@ -9,7 +9,7 @@ pub const DEFAULT_POLL_MS: u64 = 2_000;
 
 /// Live, read-only visualization of Git working-tree changes.
 #[derive(Debug, Parser)]
-#[command(name = "gitwatch", version, about)]
+#[command(name = "gitwatch", version = env!("GITWATCH_VERSION"), about)]
 pub struct Cli {
     /// A repository or a directory inside one
     #[arg(value_name = "PATH", default_value = ".")]

@@ -25,17 +25,7 @@ command_required() {
 }
 
 package_version() {
-    awk '
-        /^\[package\]$/ { in_package = 1; next }
-        /^\[/ { in_package = 0 }
-        in_package && /^version[[:space:]]*=/ {
-            value = $0
-            sub(/^[^=]*=[[:space:]]*"/, "", value)
-            sub(/"[[:space:]]*$/, "", value)
-            print value
-            exit
-        }
-    ' "$SCRIPT_DIR/Cargo.toml"
+    "$SCRIPT_DIR/version.sh" --package
 }
 
 choose_target() {

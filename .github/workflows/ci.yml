@@ -10,13 +10,55 @@ permissions:
 jobs:
   quality:
     runs-on: ubuntu-latest
+    outputs:
+      packageable: ${{ steps.version.outputs.packageable }}
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - run: bash -n quickstart.sh
+      - run: bash -n version.sh
+      - run: bash tests/versioning.sh
+      - name: Resolve version
+        id: version
+        run: |
+          echo "version=$(./version.sh)" >> "$GITHUB_OUTPUT"
+          if ./version.sh --packageable; then
+            echo "packageable=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "packageable=false" >> "$GITHUB_OUTPUT"
+          fi
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-features
+
+  packages:
+    name: Packages (${{ needs.quality.outputs.version }})
+    needs: quality
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.quality.outputs.packageable == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install RPM tooling
+        run: sudo apt-get update && sudo apt-get install --yes rpm
+      - run: ./quickstart.sh deb
+      - run: ./quickstart.sh rpm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gitwatch-${{ needs.quality.outputs.version }}-linux-packages
+          path: |
+            target/packages/*.deb
+            target/packages/*.rpm
+          if-no-files-found: error

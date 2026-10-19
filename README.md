@@ -14,6 +14,14 @@ period, with polling as a fallback for missed events and Git metadata changes.
 Snapshot collection runs on a background thread so navigation remains
 responsive during refreshes.
 
+The current release is **v0.2**. Even minor versions are stable release versions
+and are packaged by CI on pushes to `main`. Odd minor versions are development
+versions: their displayed version automatically gains the Git commit count as a
+patch component (for example, `v0.3.42`). An even-minor version may include an
+explicit patch component, such as `v1.2.1`. The release version is declared in
+[`VERSION`](VERSION); Cargo's package version uses the equivalent three-part
+SemVer form required by Cargo.
+
 Press `d` to open the repository documentation browser. It lists every regular
 `*.md` file below the repository root—including hidden and ignored files—and
 renders the selected document in the right pane. Git metadata directories and
@@ -49,6 +57,10 @@ in `target/packages/`.
 Debian packaging requires `dpkg-deb`. RPM packaging requires `rpmbuild` (usually
 provided by `rpm-build` or `rpmdevtools`). The script always builds the release
 executable first and produces only the selected package format.
+
+On pushes to `main`, GitHub Actions uploads `.deb` and `.rpm` workflow artifacts
+when the minor version in `VERSION` is even. Odd-minor development builds still
+run the complete quality suite but skip package creation.
 
 The optional refresh timings default to the policy in the project blueprint:
 
