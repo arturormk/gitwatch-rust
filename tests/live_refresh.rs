@@ -5,6 +5,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use gitwatch_rust::document::DocumentContent;
 use gitwatch_rust::snapshot::collect_snapshot;
 use gitwatch_rust::watcher::{RepositoryWatcher, WatchEvent, WatchSource};
 use gitwatch_rust::worker::{RefreshResult, SnapshotWorker};
@@ -80,6 +81,37 @@ fn snapshot_worker_recovers_after_a_collection_error() {
         .expect("worker should recover on its next request");
     assert_eq!(recovered.generation, 2);
     assert!(recovered.files.is_empty());
+}
+
+#[test]
+fn worker_reloads_markdown_after_an_on_disk_edit() {
+    let repository = TestRepository::new();
+    repository.write("README.md", b"# Before\n");
+    repository.commit_all("initial documentation");
+
+    let initial = collect_snapshot(repository.path(), 1).expect("initial snapshot should build");
+    let (_watcher, events) = RepositoryWatcher::start(&initial, Duration::from_millis(100))
+        .expect("repository watcher should start");
+    let worker = SnapshotWorker::spawn(repository.path().to_path_buf());
+
+    repository.write("README.md", b"# After\n\nUpdated on disk.\n");
+    wait_for_change(&events);
+    worker
+        .request(2)
+        .expect("documentation refresh should queue");
+
+    let refreshed = wait_for_result(&worker)
+        .documentation
+        .expect("documentation snapshot should build");
+    let readme = refreshed
+        .documents
+        .iter()
+        .find(|document| document.path == std::path::Path::new("README.md"))
+        .expect("README should remain in the documentation inventory");
+    assert_eq!(
+        readme.content,
+        DocumentContent::Text("# After\n\nUpdated on disk.\n".into())
+    );
 }
 
 fn wait_for_change(events: &Receiver<WatchEvent>) {

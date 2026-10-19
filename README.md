@@ -4,13 +4,22 @@
 is designed to stay open beside a coding agent in a normal terminal, tmux, or
 Byobu pane.
 
-The project is currently at **Phase 3**. It provides a navigable unified diff of
-the current `HEAD`-to-working-tree changes, including staged, unstaged,
+The core roadmap is complete through **Phase 3**, and the added Phase 6
+documentation browser is also complete while Phases 4 and 5 remain pending.
+Gitwatch provides a navigable unified diff of the current
+`HEAD`-to-working-tree changes, including staged, unstaged,
 untracked, renamed, deleted, binary, large, symlink, and submodule states.
 Native filesystem notifications update the view automatically after a quiet
 period, with polling as a fallback for missed events and Git metadata changes.
 Snapshot collection runs on a background thread so navigation remains
 responsive during refreshes.
+
+Press `d` to open the repository documentation browser. It lists every regular
+`*.md` file below the repository root—including hidden and ignored files—and
+renders the selected document in the right pane. Git metadata directories and
+directory symlinks are not traversed. The open document is reloaded after
+on-disk edits using the same live-refresh cycle as the diff view; press `d`
+again to return without losing either view's selection or reading position.
 
 ## Build and run
 
@@ -67,6 +76,7 @@ already running, it queues one follow-up refresh.
 | `Home` / `End` | Move to the beginning/end |
 | `n` / `p` | Next / previous hunk |
 | `t` | Open an interactive shell at the repository root; `exit` returns to Gitwatch |
+| `d` | Toggle between live diffs and rendered repository documentation |
 | `r` | Refresh immediately |
 | Left click | Select a file from the file list |
 | Mouse wheel | Scroll vertically when the pointer is over the diff pane |

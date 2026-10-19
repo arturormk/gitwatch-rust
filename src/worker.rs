@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
 
+use crate::document::{DocumentationSnapshot, collect_documents};
 use crate::model::RepositorySnapshot;
 use crate::snapshot::collect_snapshot;
 
@@ -9,6 +10,7 @@ use crate::snapshot::collect_snapshot;
 pub struct RefreshResult {
     pub generation: u64,
     pub snapshot: Result<RepositorySnapshot, String>,
+    pub documentation: Result<DocumentationSnapshot, String>,
 }
 
 pub struct SnapshotWorker {
@@ -27,10 +29,18 @@ impl SnapshotWorker {
                 while let Ok(generation) = request_rx.recv() {
                     let snapshot =
                         collect_snapshot(&path, generation).map_err(|error| format!("{error:#}"));
+                    let documentation =
+                        snapshot
+                            .as_ref()
+                            .map_err(Clone::clone)
+                            .and_then(|snapshot| {
+                                collect_documents(snapshot).map_err(|error| format!("{error:#}"))
+                            });
                     if result_tx
                         .send(RefreshResult {
                             generation,
                             snapshot,
+                            documentation,
                         })
                         .is_err()
                     {

@@ -11,7 +11,7 @@ use ratatui::{
 use gitwatch_rust::model::{ChangeStatus, DiffRow, FileChange, FileKind};
 
 use crate::{
-    app::{AppState, Focus},
+    app::{AppState, Focus, ViewMode},
     highlight::SyntaxHighlighter,
 };
 
@@ -19,27 +19,44 @@ pub(crate) fn render(frame: &mut Frame<'_>, state: &mut AppState, highlighter: &
     let areas = screen_areas(frame.area());
     render_header(frame, areas.0, state);
 
-    if state.snapshot.files.is_empty() {
-        let message = if let Some(error) = &state.error {
-            format!("Refresh failed: {error}\n\nPress r to retry or q to quit.")
-        } else {
-            "Working tree clean — waiting for changes...".to_owned()
+    if state.active_file_count() == 0 {
+        let (message, title) = match state.view_mode {
+            ViewMode::Diff => (
+                if let Some(error) = &state.error {
+                    format!("Refresh failed: {error}\n\nPress r to retry or q to quit.")
+                } else {
+                    "Working tree clean — waiting for changes...".to_owned()
+                },
+                " Unified diff ",
+            ),
+            ViewMode::Documentation => (
+                if let Some(error) = &state.error {
+                    format!("Documentation refresh failed: {error}\n\nPress r to retry.")
+                } else {
+                    "No *.md files found in this repository.".to_owned()
+                },
+                " Documentation ",
+            ),
         };
         frame.render_widget(
             Paragraph::new(message)
                 .centered()
                 .wrap(Wrap { trim: false })
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title(" Unified diff "),
-                ),
+                .block(Block::default().borders(Borders::ALL).title(title)),
             areas.1,
         );
     } else {
         let (files, diff) = body_panes(areas.1);
-        render_files(frame, files, state);
-        render_diff(frame, diff, state, highlighter);
+        match state.view_mode {
+            ViewMode::Diff => {
+                render_files(frame, files, state);
+                render_diff(frame, diff, state, highlighter);
+            }
+            ViewMode::Documentation => {
+                render_document_list(frame, files, state);
+                render_document_content(frame, diff, state, highlighter);
+            }
+        }
     }
     render_footer(frame, areas.2, state);
 }
@@ -83,11 +100,15 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     } else {
         ("live", Color::Green)
     };
+    let mode = match state.view_mode {
+        ViewMode::Diff => "unified",
+        ViewMode::Documentation => "documentation",
+    };
     let mut spans = vec![
         Span::styled(" gitwatch ", Style::default().add_modifier(Modifier::BOLD)),
         Span::raw(format!(
-            "{}  unified  ",
-            display_path(&state.snapshot.repository_root)
+            "{}  {mode}  ",
+            display_path(&state.snapshot.repository_root),
         )),
         Span::styled(status.0, Style::default().fg(status.1)),
     ];
@@ -96,6 +117,18 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
             format!("  {} warning(s)", state.snapshot.warnings.len()),
             Style::default().fg(Color::Yellow),
         ));
+    }
+    if state.view_mode == ViewMode::Documentation {
+        let warning_count = state.documentation.warnings.len();
+        if warning_count > 0 || state.documentation.incomplete {
+            spans.push(Span::styled(
+                format!(
+                    "  {} documentation warning(s)",
+                    warning_count + usize::from(state.documentation.incomplete)
+                ),
+                Style::default().fg(Color::Yellow),
+            ));
+        }
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
@@ -182,13 +215,92 @@ fn render_diff(
     frame.render_widget(paragraph, area);
 }
 
+fn render_document_list(frame: &mut Frame<'_>, area: Rect, state: &mut AppState) {
+    let items = state
+        .documentation
+        .documents
+        .iter()
+        .map(|document| ListItem::new(display_path(&document.path)))
+        .collect::<Vec<_>>();
+    let border = if state.focus == Focus::Files {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
+    let title = state
+        .selected_document()
+        .map(|document| format!(" Markdown — {} ", display_path(&document.path)))
+        .unwrap_or_else(|| " Markdown ".to_owned());
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(border))
+                .title(title),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("› ");
+    let mut list_state = ListState::default()
+        .with_selected(state.document_selected)
+        .with_offset(state.document_offset);
+    frame.render_stateful_widget(list, area, &mut list_state);
+    state.document_offset = list_state.offset();
+}
+
+fn render_document_content(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    state: &mut AppState,
+    highlighter: &SyntaxHighlighter,
+) {
+    let Some(document) = state.selected_document().cloned() else {
+        return;
+    };
+    let title = format!(" Rendered — {} ", display_path(&document.path));
+    let content_width = usize::from(area.width.saturating_sub(2)).max(1);
+    let lines = state
+        .markdown_cache
+        .lines(&document, highlighter)
+        .layout(content_width);
+    let rendered_height = lines.len();
+    let border = if state.focus == Focus::Diff {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(border))
+            .title(title),
+    );
+    let visible_height = area.height.saturating_sub(2) as usize;
+    state.document_y = state
+        .document_y
+        .min(rendered_height.saturating_sub(visible_height.max(1)));
+    let paragraph = paragraph.scroll((
+        state.document_y.min(u16::MAX as usize) as u16,
+        state.document_x.min(u16::MAX as usize) as u16,
+    ));
+    frame.render_widget(paragraph, area);
+}
+
 fn render_footer(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     let text = if let Some(error) = &state.error {
         format!(" error: {error}  •  r retry  q quit")
+    } else if state.view_mode == ViewMode::Documentation && area.width < 72 {
+        " d diffs  Tab focus  ↑↓ move  t shell  r refresh  q quit".to_owned()
+    } else if state.view_mode == ViewMode::Documentation {
+        " d diffs  Tab focus  ↑↓/j/k move  ←→/h/l scroll  t shell  r refresh  q quit".to_owned()
     } else if area.width < 72 {
-        " Tab focus  ↑↓ move  n/p hunk  t shell  r refresh  q quit".to_owned()
+        " d docs  Tab focus  ↑↓ move  n/p hunk  t shell  r refresh  q quit".to_owned()
     } else {
-        " Tab focus  ↑↓/j/k move  ←→/h/l scroll  n/p hunk  t shell  r refresh  q quit".to_owned()
+        " d docs  Tab focus  ↑↓/j/k move  ←→/h/l scroll  n/p hunk  t shell  r refresh  q quit"
+            .to_owned()
     };
     frame.render_widget(
         Paragraph::new(text).style(Style::default().add_modifier(Modifier::DIM)),

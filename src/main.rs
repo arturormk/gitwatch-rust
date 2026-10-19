@@ -1,6 +1,7 @@
 mod app;
 mod cli;
 mod highlight;
+mod markdown;
 mod terminal;
 mod ui;
 

@@ -369,9 +369,9 @@ hunk navigation refers to the same logical hunks in all modes.
 Exit criterion: every blueprint acceptance criterion is either demonstrated by
 an automated test or recorded manual check, with no repository mutation observed.
 
-### Phase 6 — Documentation browser (proposed added feature)
+### Phase 6 — Documentation browser (added feature)
 
-**Status: Proposed; post-version-one.**
+**Status: Complete; post-version-one.**
 
 This phase is an added feature, not part of the original blueprint or the
 version-one definition of done. It is nevertheless a good fit for the product:
