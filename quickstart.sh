@@ -109,9 +109,10 @@ EOF
 }
 
 build_rpm() {
-    local version work_dir top_dir spec_file
+    local version work_dir top_dir spec_file changelog_date
     version="$(package_version)"
     [[ -n "$version" ]] || die "could not read the package version from Cargo.toml"
+    changelog_date="$(LC_ALL=C date -u '+%a %b %d %Y')"
     work_dir="$(mktemp -d -t gitwatch-rpm.XXXXXXXX)"
     temporary_directory="$work_dir"
     top_dir="$work_dir/rpmbuild"
@@ -130,7 +131,7 @@ Version:        $version
 Release:        1%{?dist}
 Summary:        Live, read-only terminal viewer for Git working-tree changes
 License:        MIT
-URL:            https://github.com/arturo/gitwatch-rust
+URL:            https://github.com/arturormk/gitwatch-rust
 Source0:        $BINARY_NAME
 Source1:        LICENSE
 Source2:        README.md
@@ -156,8 +157,8 @@ install -Dm644 %{SOURCE2} %{buildroot}%{_docdir}/$PACKAGE_NAME/README.md
 %{_docdir}/$PACKAGE_NAME/README.md
 
 %changelog
-* Mon Oct 19 2026 gitwatch contributors - $version-1
-- Initial package
+* $changelog_date gitwatch contributors - $version-1
+- Package built from gitwatch $version
 EOF
 
     rpmbuild -bb --define "_topdir $top_dir" "$spec_file"

@@ -28,8 +28,12 @@ blueprint.
 - Build one normalized diff model, then render unified, before-version, and
   after-version views from it. Presentation modes do not launch their own Git
   commands.
-- Use `ratatui` and `crossterm` for the interface, `notify` for filesystem hints,
-  `similar` for line alignment, and `syntect` for syntax highlighting.
+- Use `ratatui` and `crossterm` for the interface and `notify` for filesystem
+  hints. Hunks come from Git's own diff (see section 5), and syntax colouring
+  uses a small built-in keyword highlighter (`src/highlight.rs`) for Rust,
+  C-family and `#`-comment languages. `similar` and `syntect` were planned
+  originally but are not dependencies; `syntect` remains an option if broader
+  language coverage becomes worth the extra dependency.
 - Use a standard thread/channel architecture rather than an async runtime. Git
   and filesystem work runs outside the UI thread; the UI thread owns all view
   state and terminal rendering.
@@ -178,8 +182,9 @@ submodules, symlinks, mode-only changes, unavailable files, and files beyond the
 configured internal safety limit. Lossy display is acceptable for text that is
 not valid UTF-8, but path identity must never be lossy.
 
-Use `similar` to align old and new lines and form hunks with a small fixed context
-(initially three lines). Preserve final-newline information. Rename-only changes
+Form hunks by running `git diff --no-index --unified=3` on temporary copies of the
+old and new content, written outside the repository and removed afterward, and
+parse its output (`src/diff.rs`). Preserve final-newline information. Rename-only changes
 can show a metadata message; renamed-and-edited files also show their content
 diff. This approach deliberately represents `HEAD` versus the current working
 tree, so a file with both staged and unstaged edits appears once with both status

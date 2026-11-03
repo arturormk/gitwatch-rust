@@ -15,10 +15,11 @@ Snapshot collection runs on a background thread so navigation remains
 responsive during refreshes.
 
 The current release is **v0.2.1**. Even minor versions are stable release versions
-and are packaged by CI on pushes to `main`. Odd minor versions are development
-versions: their displayed version automatically gains the Git commit count as a
-patch component (for example, `v0.3.42`). An even-minor version may include an
-explicit patch component, such as `v1.2.1`. The release version is declared in
+and CI builds `.deb` and `.rpm` workflow artifacts for them on pushes to `main`
+(see [Install](#install)). Odd minor versions are development versions: their
+displayed version automatically gains the Git commit count as a patch component
+(for example, `v0.3.42`). An even-minor version may include an explicit patch
+component, such as `v1.2.1`. The release version is declared in
 [`VERSION`](VERSION); Cargo's package version uses the equivalent three-part
 SemVer form required by Cargo.
 
@@ -60,9 +61,28 @@ Debian packaging requires `dpkg-deb`. RPM packaging requires `rpmbuild` (usually
 provided by `rpm-build` or `rpmdevtools`). The script always builds the release
 executable first and produces only the selected package format.
 
-On pushes to `main`, GitHub Actions uploads `.deb` and `.rpm` workflow artifacts
-when the minor version in `VERSION` is even. Odd-minor development builds still
-run the complete quality suite but skip package creation.
+## Install
+
+Copy the release executable onto your `PATH`:
+
+```console
+./quickstart.sh exe
+sudo install -m755 target/release/gitwatch /usr/local/bin/
+```
+
+Or install the package you built:
+
+```console
+sudo apt install ./target/packages/gitwatch_*.deb
+sudo dnf install ./target/packages/gitwatch-*.rpm
+```
+
+There are no published release downloads yet. On pushes to `main`, GitHub
+Actions builds `.deb` and `.rpm` packages when the minor version in `VERSION` is
+even and attaches them to that workflow run as artifacts. Workflow artifacts
+can only be downloaded from the run's page by signed-in GitHub users, and they
+expire after GitHub's artifact retention period. Odd-minor development builds
+still run the complete quality suite but skip package creation.
 
 The optional refresh timings default to the policy in the project blueprint:
 
