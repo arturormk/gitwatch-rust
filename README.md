@@ -14,7 +14,7 @@ period, with polling as a fallback for missed events and Git metadata changes.
 Snapshot collection runs on a background thread so navigation remains
 responsive during refreshes.
 
-The current release is **v0.2**. Even minor versions are stable release versions
+The current release is **v0.2.1**. Even minor versions are stable release versions
 and are packaged by CI on pushes to `main`. Odd minor versions are development
 versions: their displayed version automatically gains the Git commit count as a
 patch component (for example, `v0.3.42`). An even-minor version may include an
@@ -28,6 +28,8 @@ renders the selected document in the right pane. Git metadata directories and
 directory symlinks are not traversed. The open document is reloaded after
 on-disk edits using the same live-refresh cycle as the diff view; press `d`
 again to return without losing either view's selection or reading position.
+Press `i` in documentation mode to hide or show files excluded by Git ignore
+rules.
 
 ## Build and run
 
@@ -92,6 +94,7 @@ already running, it queues one follow-up refresh.
 | `v` / `V` | Cycle forward / backward through unified, before, and after views |
 | `t` | Open an interactive shell at the repository root; `exit` returns to Gitwatch |
 | `d` | Toggle between live diffs and rendered repository documentation |
+| `i` | Hide/show Git-ignored Markdown files in documentation mode |
 | `r` | Refresh immediately (normally unnecessary because refresh is automatic) |
 | Left click | Focus a pane; clicking a file in the list also selects it |
 | Mouse wheel | Scroll vertically when the pointer is over the diff pane |

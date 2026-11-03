@@ -69,7 +69,7 @@ fn ensure_allowed(arguments: &[OsString]) -> Result<()> {
     };
 
     match command {
-        "rev-parse" | "status" | "cat-file" | "ls-tree" | "diff" => {}
+        "rev-parse" | "status" | "cat-file" | "ls-tree" | "ls-files" | "diff" => {}
         _ => bail!("Git subcommand {command:?} is not approved for read-only use"),
     }
 
@@ -100,7 +100,14 @@ mod tests {
 
     #[test]
     fn permits_snapshot_queries() {
-        for command in ["rev-parse", "status", "cat-file", "ls-tree", "diff"] {
+        for command in [
+            "rev-parse",
+            "status",
+            "cat-file",
+            "ls-tree",
+            "ls-files",
+            "diff",
+        ] {
             ensure_allowed(&[OsString::from(command)]).expect("query should be allowed");
         }
     }

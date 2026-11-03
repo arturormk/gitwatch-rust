@@ -98,6 +98,8 @@ struct SearchState {
 pub(crate) struct AppState {
     pub(crate) snapshot: RepositorySnapshot,
     pub(crate) documentation: DocumentationSnapshot,
+    complete_documentation: DocumentationSnapshot,
+    pub(crate) show_ignored_documents: bool,
     pub(crate) view_mode: ViewMode,
     pub(crate) diff_presentation: DiffPresentation,
     pub(crate) focus: Focus,
@@ -125,7 +127,9 @@ impl AppState {
         let document_selected = (!documentation.documents.is_empty()).then_some(0);
         Self {
             snapshot,
+            complete_documentation: documentation.clone(),
             documentation,
+            show_ignored_documents: true,
             view_mode: ViewMode::Diff,
             diff_presentation: DiffPresentation::Unified,
             focus: Focus::Files,
@@ -171,6 +175,15 @@ impl AppState {
         }
     }
 
+    pub(crate) fn ignored_documents_hidden(&self) -> bool {
+        !self.show_ignored_documents
+            && self
+                .complete_documentation
+                .documents
+                .iter()
+                .any(|document| document.ignored)
+    }
+
     fn apply_documentation(&mut self, mut documentation: DocumentationSnapshot) {
         let old_index = self.document_selected.unwrap_or_default();
         let old_path = self
@@ -182,7 +195,7 @@ impl AppState {
                 continue;
             };
             let Some(previous) = self
-                .documentation
+                .complete_documentation
                 .documents
                 .iter()
                 .find(|previous| previous.path == document.path)
@@ -197,7 +210,49 @@ impl AppState {
                 document.content = previous.content.clone();
             }
         }
-        self.documentation = documentation;
+        self.complete_documentation = documentation;
+        self.documentation = self.complete_documentation.clone();
+        if !self.show_ignored_documents {
+            self.documentation
+                .documents
+                .retain(|document| !document.ignored);
+        }
+        self.document_selected = old_path
+            .as_deref()
+            .and_then(|path| {
+                self.documentation
+                    .documents
+                    .iter()
+                    .position(|document| document.path == path)
+            })
+            .or_else(|| {
+                (!self.documentation.documents.is_empty())
+                    .then_some(old_index.min(self.documentation.documents.len().saturating_sub(1)))
+            });
+        self.document_offset = self
+            .document_offset
+            .min(self.document_selected.unwrap_or_default());
+        if self.document_selected.is_none() {
+            self.document_y = 0;
+            self.document_x = 0;
+        } else if self.selected_document().map(|document| &document.path) != old_path.as_ref() {
+            self.restore_document_position();
+        }
+    }
+
+    fn toggle_ignored_documents(&mut self) {
+        let old_path = self
+            .selected_document()
+            .map(|document| document.path.clone());
+        let old_index = self.document_selected.unwrap_or_default();
+        self.remember_document_position();
+        self.show_ignored_documents = !self.show_ignored_documents;
+        self.documentation = self.complete_documentation.clone();
+        if !self.show_ignored_documents {
+            self.documentation
+                .documents
+                .retain(|document| !document.ignored);
+        }
         self.document_selected = old_path
             .as_deref()
             .and_then(|path| {
@@ -225,25 +280,37 @@ impl AppState {
         let old_index = self.selected.unwrap_or_default();
         let old_key = self.selected_file().map(|file| file.key.clone());
         let anchor = self.current_anchor_at(self.diff_y);
+        let changed = (self.view_mode == ViewMode::Diff)
+            .then(|| changed_file(&self.snapshot.files, &snapshot.files))
+            .flatten();
 
         self.generation = snapshot.generation;
         self.snapshot = snapshot;
         self.error = None;
-        self.selected = old_key
-            .as_deref()
-            .and_then(|key| find_file(&self.snapshot.files, key))
-            .or_else(|| {
-                (!self.snapshot.files.is_empty())
-                    .then_some(old_index.min(self.snapshot.files.len().saturating_sub(1)))
-            });
+        self.selected = changed.or_else(|| {
+            old_key
+                .as_deref()
+                .and_then(|key| find_file(&self.snapshot.files, key))
+                .or_else(|| {
+                    (!self.snapshot.files.is_empty())
+                        .then_some(old_index.min(self.snapshot.files.len().saturating_sub(1)))
+                })
+        });
         self.file_offset = self.file_offset.min(self.selected.unwrap_or_default());
-        self.diff_y = anchor
-            .as_ref()
-            .and_then(|anchor| {
-                self.selected_file()
-                    .map(|file| locate_anchor(file, anchor, self.diff_presentation))
-            })
-            .unwrap_or(0);
+        self.diff_y = if changed.is_some()
+            && self.selected_file().map(|file| &file.key) != old_key.as_ref()
+        {
+            self.diff_x = 0;
+            0
+        } else {
+            anchor
+                .as_ref()
+                .and_then(|anchor| {
+                    self.selected_file()
+                        .map(|file| locate_anchor(file, anchor, self.diff_presentation))
+                })
+                .unwrap_or(0)
+        };
         self.clamp_offsets();
     }
 
@@ -817,6 +884,9 @@ fn handle_key(key: KeyEvent, state: &mut AppState) -> AppAction {
                 ViewMode::Documentation => ViewMode::Diff,
             };
         }
+        KeyCode::Char('i') if state.view_mode == ViewMode::Documentation => {
+            state.toggle_ignored_documents();
+        }
         KeyCode::Char('v') => state.cycle_diff_presentation(true),
         KeyCode::Char('V') => state.cycle_diff_presentation(false),
         KeyCode::Char('/') => state.begin_search(),
@@ -876,6 +946,15 @@ fn find_file(files: &[FileChange], old_key: &Path) -> Option<usize> {
         file.key == old_key
             || file.old_path.as_deref() == Some(old_key)
             || file.new_path.as_deref() == Some(old_key)
+    })
+}
+
+fn changed_file(old_files: &[FileChange], new_files: &[FileChange]) -> Option<usize> {
+    new_files.iter().enumerate().find_map(|(index, new_file)| {
+        let unchanged = find_file(old_files, &new_file.key)
+            .and_then(|old_index| old_files.get(old_index))
+            == Some(new_file);
+        (!unchanged).then_some(index)
     })
 }
 
@@ -1136,6 +1215,7 @@ mod tests {
                 .map(|(path, content)| MarkdownDocument {
                     path: PathBuf::from(path),
                     content: DocumentContent::Text((*content).into()),
+                    ignored: false,
                 })
                 .collect(),
             warnings: vec![],
@@ -1148,10 +1228,34 @@ mod tests {
         let mut state = state(1, vec![file("a", 10), file("b", 20)]);
         state.selected = Some(1);
         state.diff_y = 2;
-        state.apply_snapshot(snapshot(2, vec![file("b", 20), file("c", 30)]));
+        state.apply_snapshot(snapshot(2, vec![file("b", 20)]));
         assert_eq!(state.selected, Some(0));
         assert_eq!(state.selected_file().unwrap().key, PathBuf::from("b"));
         assert_eq!(state.diff_y, 2);
+    }
+
+    #[test]
+    fn refresh_selects_a_file_whose_diff_changed() {
+        let mut state = state(1, vec![file("a", 10), file("b", 20)]);
+        state.selected = Some(0);
+        state.diff_y = 2;
+
+        state.apply_snapshot(snapshot(2, vec![file("a", 10), file("b", 21)]));
+
+        assert_eq!(state.selected, Some(1));
+        assert_eq!(state.selected_file().unwrap().key, PathBuf::from("b"));
+        assert_eq!(state.diff_y, 0);
+    }
+
+    #[test]
+    fn documentation_mode_does_not_change_the_live_diff_selection() {
+        let mut state = state(1, vec![file("a", 10), file("b", 20)]);
+        state.selected = Some(0);
+        state.view_mode = ViewMode::Documentation;
+
+        state.apply_snapshot(snapshot(2, vec![file("a", 10), file("b", 21)]));
+
+        assert_eq!(state.selected_file().unwrap().key, PathBuf::from("a"));
     }
 
     #[test]
@@ -1332,6 +1436,30 @@ mod tests {
     }
 
     #[test]
+    fn ignored_document_key_toggles_visibility_in_documentation_mode() {
+        let mut documents = documentation(&[
+            ("README.md", "# Read me"),
+            ("target/notes.md", "ignored notes"),
+        ]);
+        documents.documents[1].ignored = true;
+        let mut state = AppState::new(snapshot(1, vec![]), documents);
+        state.view_mode = ViewMode::Documentation;
+        let key = KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE);
+
+        handle_key(key, &mut state);
+        assert!(!state.show_ignored_documents);
+        assert_eq!(state.documentation.documents.len(), 1);
+        assert_eq!(
+            state.documentation.documents[0].path,
+            Path::new("README.md")
+        );
+
+        handle_key(key, &mut state);
+        assert!(state.show_ignored_documents);
+        assert_eq!(state.documentation.documents.len(), 2);
+    }
+
+    #[test]
     fn documentation_refresh_preserves_open_path_and_reading_position() {
         let mut state = AppState::new(
             snapshot(1, vec![]),
@@ -1364,6 +1492,7 @@ mod tests {
             documents: vec![MarkdownDocument {
                 path: PathBuf::from("README.md"),
                 content: DocumentContent::Unavailable("permission denied".into()),
+                ignored: false,
             }],
             warnings: vec![],
             incomplete: false,

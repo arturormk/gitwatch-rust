@@ -1,9 +1,15 @@
+use std::collections::HashSet;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use crate::git::run_read_only;
 use crate::model::RepositorySnapshot;
+
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
 
 pub const MAX_DOCUMENTS: usize = 2_048;
 pub const MAX_SCANNED_ENTRIES: usize = 200_000;
@@ -21,6 +27,7 @@ pub struct DocumentationSnapshot {
 pub struct MarkdownDocument {
     pub path: PathBuf,
     pub content: DocumentContent,
+    pub ignored: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -31,16 +38,41 @@ pub enum DocumentContent {
 }
 
 pub fn collect_documents(snapshot: &RepositorySnapshot) -> Result<DocumentationSnapshot> {
+    let ignored = ignored_paths(&snapshot.repository_root)?;
     collect_from_root(
         &snapshot.repository_root,
         &[
             snapshot.git_dir.as_path(),
             snapshot.common_git_dir.as_path(),
         ],
+        &ignored,
     )
 }
 
-fn collect_from_root(root: &Path, excluded: &[&Path]) -> Result<DocumentationSnapshot> {
+fn ignored_paths(root: &Path) -> Result<HashSet<PathBuf>> {
+    let output = run_read_only(
+        root,
+        [
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "-z",
+        ],
+    )?;
+    Ok(output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| PathBuf::from(os_string(path)))
+        .collect())
+}
+
+fn collect_from_root(
+    root: &Path,
+    excluded: &[&Path],
+    ignored: &HashSet<PathBuf>,
+) -> Result<DocumentationSnapshot> {
     let mut result = DocumentationSnapshot::default();
     let mut stack = vec![root.to_path_buf()];
     let mut total_bytes = 0usize;
@@ -141,6 +173,7 @@ fn collect_from_root(root: &Path, excluded: &[&Path]) -> Result<DocumentationSna
                 }
             };
             result.documents.push(MarkdownDocument {
+                ignored: ignored.contains(&relative),
                 path: relative,
                 content,
             });
@@ -151,6 +184,16 @@ fn collect_from_root(root: &Path, excluded: &[&Path]) -> Result<DocumentationSna
         .documents
         .sort_by(|left, right| left.path.as_os_str().cmp(right.path.as_os_str()));
     Ok(result)
+}
+
+#[cfg(unix)]
+fn os_string(bytes: &[u8]) -> OsString {
+    OsString::from_vec(bytes.to_vec())
+}
+
+#[cfg(not(unix))]
+fn os_string(bytes: &[u8]) -> OsString {
+    OsString::from(String::from_utf8_lossy(bytes).into_owned())
 }
 
 fn relative_display(root: &Path, path: &Path) -> String {
@@ -193,7 +236,8 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(root.join("docs"), root.join("linked-docs")).unwrap();
 
-        let documents = collect_from_root(&root, &[root.join(".git").as_path()]).unwrap();
+        let ignored = HashSet::from([PathBuf::from(".hidden/notes.md")]);
+        let documents = collect_from_root(&root, &[root.join(".git").as_path()], &ignored).unwrap();
         let paths = documents
             .documents
             .iter()
@@ -206,6 +250,12 @@ mod tests {
                 Path::new("README.md"),
                 Path::new("docs/plan.md")
             ]
+        );
+        assert!(documents.documents[0].ignored);
+        assert!(
+            documents.documents[1..]
+                .iter()
+                .all(|document| !document.ignored)
         );
 
         fs::remove_dir_all(root).unwrap();

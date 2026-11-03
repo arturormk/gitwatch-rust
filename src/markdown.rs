@@ -677,6 +677,7 @@ mod tests {
         let mut document = MarkdownDocument {
             path: PathBuf::from("README.md"),
             content: DocumentContent::Text("# Before".into()),
+            ignored: false,
         };
         let before = cache.lines(&document, &highlighter).layout(80)[0].clone();
         document.content = DocumentContent::Text("# After".into());

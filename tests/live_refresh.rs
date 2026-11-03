@@ -5,7 +5,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use gitwatch_rust::document::DocumentContent;
+use gitwatch_rust::document::{DocumentContent, collect_documents};
 use gitwatch_rust::snapshot::collect_snapshot;
 use gitwatch_rust::watcher::{RepositoryWatcher, WatchEvent, WatchSource};
 use gitwatch_rust::worker::{RefreshResult, SnapshotWorker};
@@ -111,6 +111,35 @@ fn worker_reloads_markdown_after_an_on_disk_edit() {
     assert_eq!(
         readme.content,
         DocumentContent::Text("# After\n\nUpdated on disk.\n".into())
+    );
+}
+
+#[test]
+fn documentation_inventory_marks_gitignored_markdown() {
+    let repository = TestRepository::new();
+    repository.write(".gitignore", b"ignored.md\nignored-dir/\n");
+    repository.write("README.md", b"visible\n");
+    repository.write("ignored.md", b"ignored\n");
+    repository.write("ignored-dir/notes.md", b"also ignored\n");
+    repository.commit_all("initial documentation");
+
+    let snapshot = collect_snapshot(repository.path(), 1).expect("snapshot should build");
+    let documents = collect_documents(&snapshot).expect("documents should be collected");
+
+    assert_eq!(documents.documents.len(), 3);
+    assert!(
+        documents
+            .documents
+            .iter()
+            .find(|document| document.path == std::path::Path::new("README.md"))
+            .is_some_and(|document| !document.ignored)
+    );
+    assert!(
+        documents
+            .documents
+            .iter()
+            .filter(|document| document.path != std::path::Path::new("README.md"))
+            .all(|document| document.ignored)
     );
 }
 

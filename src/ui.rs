@@ -36,6 +36,8 @@ pub(crate) fn render(frame: &mut Frame<'_>, state: &mut AppState, highlighter: &
             ViewMode::Documentation => (
                 if let Some(error) = &state.error {
                     format!("Documentation refresh failed: {error}\n\nPress r to retry.")
+                } else if state.ignored_documents_hidden() {
+                    "No visible *.md files. Press i to show Git-ignored files.".to_owned()
                 } else {
                     "No *.md files found in this repository.".to_owned()
                 },
@@ -325,9 +327,16 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     } else if let Some(status) = state.search_status() {
         format!(" {status}  n/N next/previous  / new search  Esc clear")
     } else if state.view_mode == ViewMode::Documentation && area.width < 72 {
-        " d diffs  / search  Tab focus  ↑↓ move  q quit".to_owned()
+        " d diffs  i ignored  / search  ↑↓ move  q quit".to_owned()
     } else if state.view_mode == ViewMode::Documentation {
-        " d diffs  / search  Tab focus  ↑↓/j/k move  ←→/h/l scroll  t shell  q quit".to_owned()
+        format!(
+            " d diffs  i ignored:{}  / search  Tab focus  ↑↓/j/k move  ←→/h/l scroll  t shell  q quit",
+            if state.show_ignored_documents {
+                "on"
+            } else {
+                "off"
+            }
+        )
     } else if area.width < 72 {
         " v/V view  d docs  / search  ↑↓ move  n/p hunk  q quit".to_owned()
     } else {

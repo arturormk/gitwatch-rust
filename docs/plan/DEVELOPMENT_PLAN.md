@@ -359,7 +359,7 @@ hunks in all modes.
 
 **Status: Not started.**
 
-This phase gates v1.0, not installable pre-1.0 releases. The current v0.2 release
+This phase gates v1.0, not installable pre-1.0 releases. The current v0.2.1 release
 is intentionally packageable while this hardening and acceptance work remains.
 
 - Exercise worktrees, temporary repository disappearance, concurrent writes,
