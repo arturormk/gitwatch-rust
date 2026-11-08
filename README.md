@@ -14,7 +14,7 @@ period, with polling as a fallback for missed events and Git metadata changes.
 Snapshot collection runs on a background thread so navigation remains
 responsive during refreshes.
 
-The current release is **v0.2.1**. Even minor versions are stable release versions
+The current release is **v0.2.2**. Even minor versions are stable release versions
 and CI builds `.deb` and `.rpm` workflow artifacts for them on pushes to `main`
 (see [Install](#install)). Odd minor versions are development versions: their
 displayed version automatically gains the Git commit count as a patch component

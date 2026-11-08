@@ -224,6 +224,8 @@ Display:
 - Repository name or path.
 - Current diff mode.
 - Optional small live/pending/error indicator.
+- Current branch name, right-aligned, updated on refresh (or
+  `detached @ <short hash>` when HEAD is detached).
 
 ### Footer
 

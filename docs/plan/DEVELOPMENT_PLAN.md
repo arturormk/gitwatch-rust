@@ -250,7 +250,8 @@ the right, and a one-line help footer. The left pane should use roughly 25–30%
 the width with reasonable minimums; the diff receives the remainder.
 
 - Header: `gitwatch`, compact repository path/name, mode, and one of
-  `live`, `pending`, `refreshing`, or `error`.
+  `live`, `pending`, `refreshing`, or `error`; the current branch (or
+  `detached @ <short hash>`) is right-aligned.
 - File list: concise status (`M`, `A`, `D`, `R`, `?`) plus staged/unstaged
   distinction without making the pane noisy. Show the full path in a title or
   status area when truncated.
@@ -364,7 +365,7 @@ hunks in all modes.
 
 **Status: Not started.**
 
-This phase gates v1.0, not installable pre-1.0 releases. The current v0.2.1 release
+This phase gates v1.0, not installable pre-1.0 releases. The current v0.2.2 release
 is intentionally packageable while this hardening and acceptance work remains.
 
 - Exercise worktrees, temporary repository disappearance, concurrent writes,

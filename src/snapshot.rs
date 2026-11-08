@@ -69,12 +69,13 @@ pub fn collect_snapshot(requested_path: &Path, generation: u64) -> Result<Reposi
         [
             "status",
             "--porcelain=v2",
+            "--branch",
             "-z",
             "--untracked-files=all",
             "--ignore-submodules=none",
         ],
     )?;
-    let entries = parse_status(&output.stdout)?;
+    let ParsedStatus { branch, entries } = parse_status(&output.stdout)?;
     let mut warnings = Vec::new();
     let mut files = Vec::with_capacity(entries.len());
 
@@ -89,6 +90,7 @@ pub fn collect_snapshot(requested_path: &Path, generation: u64) -> Result<Reposi
         git_dir: repository.git_dir,
         common_git_dir: repository.common_git_dir,
         head_identity: repository.head_identity,
+        branch,
         collected_at: SystemTime::now(),
         files,
         warnings,
@@ -401,9 +403,15 @@ struct StatusEntry {
     unstaged: bool,
 }
 
-fn parse_status(input: &[u8]) -> Result<Vec<StatusEntry>> {
+struct ParsedStatus {
+    branch: Option<String>,
+    entries: Vec<StatusEntry>,
+}
+
+fn parse_status(input: &[u8]) -> Result<ParsedStatus> {
     let records: Vec<&[u8]> = input.split(|byte| *byte == 0).collect();
     let mut entries = Vec::new();
+    let mut branch = None;
     let mut index = 0;
     while index < records.len() {
         let record = records[index];
@@ -431,11 +439,17 @@ fn parse_status(input: &[u8]) -> Result<Vec<StatusEntry>> {
                 entries.push(untracked_entry(path));
             }
             b'!' => {}
-            b'#' => {}
+            b'#' => {
+                if let Some(head) = record.strip_prefix(b"# branch.head ")
+                    && head != b"(detached)"
+                {
+                    branch = Some(String::from_utf8_lossy(head).into_owned());
+                }
+            }
             other => bail!("unsupported porcelain-v2 record type {other:?}"),
         }
     }
-    Ok(entries)
+    Ok(ParsedStatus { branch, entries })
 }
 
 fn parse_ordinary(record: &[u8]) -> Result<StatusEntry> {
@@ -673,13 +687,25 @@ mod tests {
 2 R. N... 100644 100644 100644 cccccccccccccccccccccccccccccccccccccccc dddddddddddddddddddddddddddddddddddddddd R100 new\0old\0\
 ? untracked\0\
 u UU N... 100644 100644 100644 100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb cccccccccccccccccccccccccccccccccccccccc conflict\0";
-        let entries = parse_status(input).expect("status should parse");
+        let entries = parse_status(input).expect("status should parse").entries;
         assert_eq!(entries.len(), 4);
         assert_eq!(entries[0].new_path.as_deref(), Some(Path::new("file name")));
         assert_eq!(entries[1].old_path.as_deref(), Some(Path::new("old")));
         assert_eq!(entries[1].new_path.as_deref(), Some(Path::new("new")));
         assert_eq!(entries[2].status, ChangeStatus::Untracked);
         assert_eq!(entries[3].status, ChangeStatus::Conflicted);
+    }
+
+    #[test]
+    fn reads_branch_name_from_status_headers() {
+        let input = b"# branch.oid (initial)\0# branch.head feature/x\0? new\0";
+        let parsed = parse_status(input).expect("status should parse");
+        assert_eq!(parsed.branch.as_deref(), Some("feature/x"));
+        assert_eq!(parsed.entries.len(), 1);
+
+        let detached = parse_status(b"# branch.oid abc\0# branch.head (detached)\0")
+            .expect("status should parse");
+        assert!(detached.branch.is_none());
     }
 
     #[test]

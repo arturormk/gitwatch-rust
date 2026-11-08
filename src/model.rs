@@ -8,6 +8,8 @@ pub struct RepositorySnapshot {
     pub git_dir: PathBuf,
     pub common_git_dir: PathBuf,
     pub head_identity: Option<String>,
+    /// Checked-out branch name, or `None` when HEAD is detached.
+    pub branch: Option<String>,
     pub collected_at: SystemTime,
     pub files: Vec<FileChange>,
     pub warnings: Vec<SnapshotWarning>,

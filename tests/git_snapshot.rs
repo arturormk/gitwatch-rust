@@ -183,6 +183,25 @@ fn identifies_gitlink_entries_as_submodules() {
 }
 
 #[test]
+fn reports_the_current_branch_and_detached_head() {
+    let repository = TestRepository::new();
+    repository.git(["checkout", "--quiet", "-b", "topic/one"]);
+    let unborn = collect_snapshot(repository.path(), 1).expect("unborn snapshot should build");
+    assert_eq!(unborn.branch.as_deref(), Some("topic/one"));
+
+    repository.write("file.txt", b"content\n");
+    repository.commit_all("initial");
+    repository.git(["checkout", "--quiet", "-b", "topic/two"]);
+    let switched = collect_snapshot(repository.path(), 2).expect("snapshot should build");
+    assert_eq!(switched.branch.as_deref(), Some("topic/two"));
+
+    repository.git(["checkout", "--quiet", "--detach"]);
+    let detached = collect_snapshot(repository.path(), 3).expect("snapshot should build");
+    assert!(detached.branch.is_none());
+    assert!(detached.head_identity.is_some());
+}
+
+#[test]
 fn repeated_snapshots_do_not_change_the_index() {
     let repository = TestRepository::new();
     repository.write("tracked.txt", b"base\n");

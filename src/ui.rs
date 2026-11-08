@@ -2,13 +2,13 @@ use std::{collections::HashSet, path::Path};
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 
-use gitwatch_rust::model::{ChangeStatus, DiffRow, FileChange, FileKind};
+use gitwatch_rust::model::{ChangeStatus, DiffRow, FileChange, FileKind, RepositorySnapshot};
 
 use crate::{
     app::{AppState, DiffPresentation, Focus, ViewMode},
@@ -141,6 +141,34 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         }
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+
+    let branch = Span::styled(
+        format!(" {} ", branch_label(&state.snapshot)),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    );
+    let branch_width = (branch.width() as u16).min(area.width / 2);
+    if branch_width > 2 {
+        let branch_area = Rect {
+            x: area.x + area.width - branch_width,
+            width: branch_width,
+            ..area
+        };
+        frame.render_widget(Clear, branch_area);
+        frame.render_widget(
+            Paragraph::new(branch).alignment(Alignment::Right),
+            branch_area,
+        );
+    }
+}
+
+fn branch_label(snapshot: &RepositorySnapshot) -> String {
+    match (&snapshot.branch, &snapshot.head_identity) {
+        (Some(branch), _) => format!("⎇ {branch}"),
+        (None, Some(head)) => format!("detached @ {}", &head[..head.len().min(7)]),
+        (None, None) => "detached".into(),
+    }
 }
 
 fn render_files(frame: &mut Frame<'_>, area: Rect, state: &mut AppState) {

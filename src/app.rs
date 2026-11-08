@@ -1195,6 +1195,7 @@ mod tests {
             git_dir: PathBuf::from("/repo/.git"),
             common_git_dir: PathBuf::from("/repo/.git"),
             head_identity: Some("head".into()),
+            branch: Some("main".into()),
             collected_at: SystemTime::now(),
             files,
             warnings: vec![],
