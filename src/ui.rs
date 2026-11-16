@@ -145,7 +145,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     let branch = Span::styled(
         format!(" {} ", branch_label(&state.snapshot)),
         Style::default()
-            .fg(Color::Cyan)
+            .fg(branch_color(&state.snapshot))
             .add_modifier(Modifier::BOLD),
     );
     let branch_width = (branch.width() as u16).min(area.width / 2);
@@ -163,9 +163,16 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     }
 }
 
+fn branch_color(snapshot: &RepositorySnapshot) -> Color {
+    match snapshot.branch.as_deref() {
+        Some("main" | "master") => Color::Cyan,
+        _ => Color::LightBlue,
+    }
+}
+
 fn branch_label(snapshot: &RepositorySnapshot) -> String {
     match (&snapshot.branch, &snapshot.head_identity) {
-        (Some(branch), _) => format!("⎇ {branch}"),
+        (Some(branch), _) => format!("⎇  {branch}"),
         (None, Some(head)) => format!("detached @ {}", &head[..head.len().min(7)]),
         (None, None) => "detached".into(),
     }
