@@ -370,6 +370,31 @@ is intentionally packageable while this hardening and acceptance work remains.
 
 - Exercise worktrees, temporary repository disappearance, concurrent writes,
   large/binary files, symlinks, submodules, mode changes, and Git failures.
+- Make the snapshot's baseline explicit and verified. Today `head_identity`
+  comes from a `rev-parse HEAD` run before `git status`, while the baseline
+  blobs come from the OIDs that `status` reports, and nothing checks that the two
+  match. Take the baseline from status's own `# branch.oid` record instead (or
+  compare it with the starting `rev-parse`). Then, after the working-tree reads
+  and before returning the result, re-resolve `HEAD` (and the branch ref). If the
+  baseline moved, don't show the result as current: either drop it and refresh
+  right away, or apply it marked stale with a follow-up refresh already queued.
+  The pane must never show an old-baseline diff, or an empty pane caused by a
+  baseline mismatch, as the current state. This doesn't freeze ongoing
+  working-tree edits, which stay eventually consistent. It only separates
+  baseline changes from ordinary editing.
+- Add a commit-during-refresh fixture: start collecting a snapshot, commit (move
+  `HEAD`) before the remaining Git and file reads finish, and assert that the
+  result is never labeled as current with a stale baseline, and that a clean
+  snapshot with the new `HEAD` identity follows. Cover branch switches, `reset`,
+  and amend as well as plain commits. Add an injectable pause point in
+  `collect_snapshot` so the test is deterministic rather than timing-based.
+- Add out-of-order and stale-result checks around the worker/generation
+  protocol. The scheduler's coalescing is already tested
+  (`events_during_refresh_coalesce_into_one_follow_up`), but the rule that
+  accepts results (`result.generation >= state.generation`) sits inline in the
+  event loop with no test. Move it into a testable function and assert that a
+  result for generation N arriving after N+1 was applied never replaces the newer
+  data.
 - Profile a representative repository; remove avoidable idle redraw/diff work.
 - Complete README installation, usage, shortcuts, behavior, and known limits.
 - Run manual smoke tests in a normal terminal and tmux/Byobu.
