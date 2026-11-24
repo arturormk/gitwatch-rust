@@ -1,5 +1,9 @@
 # gitwatch
 
+[![CI](https://github.com/arturormk/gitwatch-rust/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/arturormk/gitwatch-rust/actions/workflows/ci.yml)
+[![Built with Codex](https://img.shields.io/badge/Built%20with-Codex-000000?logo=openai&logoColor=white)](https://openai.com/codex)
+[![Built with Claude Code](https://img.shields.io/badge/Built%20with-Claude%20Code-D97757?logo=claude&logoColor=white)](https://claude.com/claude-code)
+
 `gitwatch` is a small, read-only terminal viewer for uncommitted Git changes. It
 is designed to stay open beside a coding agent in a normal terminal, tmux, or
 Byobu pane.
